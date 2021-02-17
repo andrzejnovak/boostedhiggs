@@ -342,7 +342,8 @@ class HbbProcessor(processor.ProcessorABC):
         #####
 
         if isRealData :
-            genflavor = candidatejet.pt - candidatejet.pt  # zeros_like
+            #genflavor = candidatejet.pt - candidatejet.pt  # zeros_like
+            genflavor = ak.zeros_like(candidatejet.pt)
         else:
             weights.add('genweight', events.genWeight)
             add_pileup_weight(weights, events.Pileup.nPU, self._year, dataset)
