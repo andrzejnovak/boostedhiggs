@@ -19,6 +19,7 @@ from boostedhiggs.corrections import (
     add_pileup_weight,
     add_VJets_NLOkFactor,
     add_jetTriggerWeight,
+    add_jetTriggerWeight17mod,
     jet_factory,
     fatjet_factory,
     add_jec_variables,
@@ -40,7 +41,7 @@ def update(events, collections):
 
 class HbbProcessor(processor.ProcessorABC):
     def __init__(self, year='2017', jet_arbitration='pt', v2=False, v3=False, v4=False,
-            nnlops_rew=False,  skipJER=False, tightMatch=False,
+            nnlops_rew=False,  skipJER=False, tightMatch=False, newTrigger=False,
         ):
         # v2 DDXv2
         # v3 ParticleNet
@@ -53,6 +54,8 @@ class HbbProcessor(processor.ProcessorABC):
         self._jet_arbitration = jet_arbitration
         self._skipJER = skipJER
         self._tightMatch = tightMatch
+        self._newTrigger = newTrigger
+        print("new trig", newTrigger)
 
         self._btagSF = BTagCorrector(year, 'medium')
 
@@ -107,6 +110,14 @@ class HbbProcessor(processor.ProcessorABC):
                 'AK8PFJet330_TrimMass30_PFAK8BoostedDoubleB_np4',
             ],
         }
+        if self._newTrigger:
+            self._triggers['2017'] = [
+                'PFHT1050',
+                'AK8PFJet400_TrimMass30',
+                'AK8PFHT800_TrimMass50',
+                'AK8PFJet500'
+            ]
+        print(self._triggers['2017'])
 
         self._json_paths = {
             '2016': 'jsons/Cert_271036-284044_13TeV_23Sep2016ReReco_Collisions16_JSON.txt', 
@@ -421,7 +432,10 @@ class HbbProcessor(processor.ProcessorABC):
             genBosonPt = ak.fill_none(ak.firsts(bosons.pt), 0)
             add_VJets_NLOkFactor(weights, genBosonPt, self._year, dataset)
             weights_wtag = copy.deepcopy(weights)
-            add_jetTriggerWeight(weights, candidatejet.msdcorr, candidatejet.pt, self._year)
+            if self._year == '2017' and self._newTrigger:
+                add_jetTriggerWeight17mod(weights, candidatejet.msdcorr, candidatejet.pt, self._year)
+            else:
+                add_jetTriggerWeight(weights, candidatejet.msdcorr, candidatejet.pt, self._year)
             if shift_name is None:
                 output['btagWeight'].fill(dataset=dataset, val=self._btagSF.addBtagWeight(weights, ak4_away))
             if self._nnlops_rew and dataset in ['GluGluHToCC_M125_13TeV_powheg_pythia8']:
@@ -514,7 +528,6 @@ class HbbProcessor(processor.ProcessorABC):
                     region=region,
                     systematic=sname,
                     genflavor=normalize(genflavor, cut),
-                    pt=normalize(candidatejet.pt, cut),
                     msd=normalize(msd_matched, cut),
                     n2ddt=normalize(candidatejet.n2ddt, cut),
                     ddb=normalize(bvl, cut),
