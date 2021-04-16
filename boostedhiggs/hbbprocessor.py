@@ -122,6 +122,18 @@ class HbbProcessor(processor.ProcessorABC):
             '2018': 'jsons/Cert_314472-325175_13TeV_17SeptEarlyReReco2018ABC_PromptEraD_Collisions18_JSON.txt',
         }
 
+        if self._v3:
+            taggerbins = (
+                hist.Bin('ddb', r'Jet ddb score', [0, 0.7, 0.89, 1]),
+                hist.Bin('ddc', r'Jet ddc score', [0, 0.44, .84, 1]),
+                hist.Bin('ddcvb', r'Jet ddcvb score', [0, 0.017, 0.11, 1]),
+            )
+        else:
+            taggerbins = (
+                hist.Bin('ddb', r'Jet ddb score', [0, 0.7, 0.89, 1]),
+                hist.Bin('ddc', r'Jet ddc score', [0, 0.1, 0.44, .83, 1]),
+                hist.Bin('ddcvb', r'Jet ddcvb score', [0, 0.017, 0.2, 1]),
+            )
         self._accumulator = processor.dict_accumulator({
             # dataset -> sumw
             'sumw': processor.defaultdict_accumulator(float),
@@ -164,9 +176,7 @@ class HbbProcessor(processor.ProcessorABC):
                 hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
                 hist.Bin('pt', r'Jet $p_{T}$ [GeV]', [450, 500, 550, 600, 675, 800, 1200]),
                 hist.Bin('msd', r'Jet $m_{sd}$', 23, 40, 201),
-                hist.Bin('ddb', r'Jet ddb score', [0, 0.7, 0.89, 1]),
-                hist.Bin('ddc', r'Jet ddc score', [0, 0.1, 0.44, .83, 1]),
-                hist.Bin('ddcvb', r'Jet ddcvb score', [0, 0.017, 0.2, 1]),
+                *taggerbins,
             ),
             'signal_opt': hist.Hist(
                 'Events',
@@ -317,8 +327,8 @@ class HbbProcessor(processor.ProcessorABC):
             cvl = candidatejet.btagDDCvLV2
             cvb = candidatejet.btagDDCvBV2
         elif self._v3:
-            bvl = candidatejet.particleNet_HbbvsQCD
-            cvl = candidatejet.particleNet_HccvsQCD
+            bvl = candidatejet.particleNetMD_Xbb
+            cvl = candidatejet.particleNetMD_Xcc/(1 - candidatejet.particleNetMD_Xbb)
             cvb = candidatejet.particleNetMD_Xcc/(candidatejet.particleNetMD_Xcc + candidatejet.particleNetMD_Xbb)
         elif self._v4:
             bvl = candidatejet.particleNet_HbbvsQCD
