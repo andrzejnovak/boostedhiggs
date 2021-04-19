@@ -3,7 +3,9 @@ import numpy as np
 import awkward as ak
 import json
 import copy
+from collections import defaultdict
 from coffea import processor, hist
+import hist as hist2
 from coffea.analysis_tools import Weights, PackedSelection
 from coffea.lumi_tools import LumiMask
 from boostedhiggs.btag import BTagEfficiency, BTagCorrector
@@ -52,7 +54,7 @@ class HbbProcessor(processor.ProcessorABC):
         self._skipJER = skipJER
         self._tightMatch = tightMatch
         self._newTrigger = newTrigger  # Fewer triggers, new maps (2017 only, ~no effect)
-        self._looseTau = looseTau  # Looser tau cuts
+        self._looseTau = looseTau  # Looser tau veto
 
         self._btagSF = BTagCorrector(year, 'medium')
 
@@ -122,129 +124,117 @@ class HbbProcessor(processor.ProcessorABC):
             '2018': 'jsons/Cert_314472-325175_13TeV_17SeptEarlyReReco2018ABC_PromptEraD_Collisions18_JSON.txt',
         }
 
-        self._accumulator = processor.dict_accumulator({
+        optbins = np.r_[np.linspace(0, 0.15, 30, endpoint=False), np.linspace(0.15, 1, 86)]
+        self.make_output = lambda: {
             # dataset -> sumw
-            'sumw': processor.defaultdict_accumulator(float),
-            'cutflow_msd': hist.Hist(
-                'Events',
-                hist.Cat('dataset', 'Dataset'),
-                hist.Cat('region', 'Region'),
-                hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
-                hist.Bin('cut', 'Cut index', 11, 0, 11),
-                hist.Bin('msd', r'Jet $m_{sd}$', 23, 40, 201),
+            'sumw': defaultdict(float),
+            'cutflow_msd': hist2.Hist(
+                hist2.axis.StrCategory([], name='dataset', growth=True),
+                hist2.axis.StrCategory([], name='region', growth=True),
+                hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
+                hist2.axis.IntCategory(range(11), name='cut', label='Cut index'),
+                hist2.axis.Regular(23, 40, 201, name='msd', label=r'Jet $m_{sd}$'),
+                hist2.storage.Weight(),
             ),
-            'cutflow_eta': hist.Hist(
-                'Events',
-                hist.Cat('dataset', 'Dataset'),
-                hist.Cat('region', 'Region'),
-                hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
-                hist.Bin('cut', 'Cut index', 11, 0, 11),
-                hist.Bin('eta', r'Jet $\eta$', 40, -2.5, 2.5),
+            'cutflow_eta': hist2.Hist(
+                hist2.axis.StrCategory([], name='dataset', growth=True),
+                hist2.axis.StrCategory([], name='region', growth=True),
+                hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
+                hist2.axis.IntCategory(range(11), name='cut', label='Cut index'),
+                hist2.axis.Regular(40, -2.5, 2.5, name='eta', label=r'Jet $\eta$'),
+                hist2.storage.Weight(),
             ),
-            'cutflow_pt': hist.Hist(
-                'Events',
-                hist.Cat('dataset', 'Dataset'),
-                hist.Cat('region', 'Region'),
-                hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
-                hist.Bin('cut', 'Cut index', 11, 0, 11),
-                hist.Bin('pt', r'Jet $p_{T}$ [GeV]', 100, 400, 1200),
+            'cutflow_pt': hist2.Hist(
+                hist2.axis.StrCategory([], name='dataset', growth=True),
+                hist2.axis.StrCategory([], name='region', growth=True),
+                hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
+                hist2.axis.IntCategory(range(11), name='cut', label='Cut index'),
+                hist2.axis.Regular(100, 400, 1200, name='pt', label=r'Jet $p_{T}$ [GeV]'),
+                hist2.storage.Weight(),
             ),
-            'nminus1_n2ddt': hist.Hist(
-                'Events',
-                hist.Cat('dataset', 'Dataset'),
-                hist.Cat('region', 'Region'),
-                hist.Bin('n2ddt', 'N2ddt value', 40, -0.25, 0.25),
+            'nminus1_n2ddt': hist2.Hist(
+                hist2.axis.StrCategory([], name='dataset', growth=True),
+                hist2.axis.StrCategory([], name='region', growth=True),
+                hist2.axis.Regular(40, -0.25, 0.25, name='n2ddt', label='N2ddt value'),
+                hist2.storage.Weight(),
             ),
-            'btagWeight': hist.Hist('Events', hist.Cat('dataset', 'Dataset'), hist.Bin('val', 'BTag correction', 50, 0, 3)),
-            'templates': hist.Hist(
-                'Events',
-                hist.Cat('dataset', 'Dataset'),
-                hist.Cat('region', 'Region'),
-                hist.Cat('systematic', 'Systematic'),
-                hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
-                hist.Bin('pt', r'Jet $p_{T}$ [GeV]', [450, 500, 550, 600, 675, 800, 1200]),
-                hist.Bin('msd', r'Jet $m_{sd}$', 23, 40, 201),
-                hist.Bin('ddb', r'Jet ddb score', [0, 0.7, 0.89, 1]),
-                hist.Bin('ddc', r'Jet ddc score', [0, 0.1, 0.44, .83, 1]),
-                hist.Bin('ddcvb', r'Jet ddcvb score', [0, 0.017, 0.2, 1]),
+            'btagWeight': hist2.Hist(
+                hist2.axis.StrCategory([], name='dataset', growth=True),
+                hist2.axis.Regular(50, 0, 3, name='val', label='BTag correction'),
+                hist2.storage.Weight(),
             ),
-            'signal_opt': hist.Hist(
-                'Events',
-                hist.Cat('dataset', 'Dataset'),
-                hist.Cat('region', 'Region'),
-                hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
-                # hist.Bin('ddc', r'Jet CvL score', np.r_[0, np.geomspace(0.01, 1, 101)]) if self._v2 else hist.Bin('ddc', r'Jet CvL score', 100, 0, 1),
-                # hist.Bin('ddcvb', r'Jet CvB score',np.r_[0, np.geomspace(0.01, 1, 101)]) if self._v2 else hist.Bin('ddcvb', r'Jet CvB score', 100, 0, 1),
-                hist.Bin('ddc', r'Jet CvL score', np.r_[np.linspace(0, 0.15, 31), np.linspace(0.15, 1, 86)]),
-                hist.Bin('ddcvb', r'Jet CvB score', np.r_[np.linspace(0, 0.15, 31), np.linspace(0.15, 1, 86)]),
+            'templates': hist2.Hist(
+                hist2.axis.StrCategory([], name='dataset', growth=True),
+                hist2.axis.StrCategory([], name='region', growth=True),
+                hist2.axis.StrCategory([], name='systematic', growth=True),
+                hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
+                hist2.axis.Variable([450, 500, 550, 600, 675, 800, 1200], name='pt', label=r'Jet $p_{T}$ [GeV]'),
+                hist2.axis.Regular(23, 40, 201, name='msd', label=r'Jet $m_{sd}$'),
+                hist2.axis.Variable([0, 0.7, 0.89, 1], name='ddb', label=r'Jet ddb score', flow=False),
+                hist2.axis.Variable([0, 0.1, 0.44, .83, 1], name='ddc', label=r'Jet ddc score', flow=False),
+                hist2.axis.Variable([0, 0.017, 0.2, 1], name='ddcvb', label=r'Jet ddcvb score', flow=False),
+                hist2.storage.Weight(),
             ),
-            'signal_optb': hist.Hist(
-                'Events',
-                hist.Cat('dataset', 'Dataset'),
-                hist.Cat('region', 'Region'),
-                hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
-                # hist.Bin('ddb', r'Jet BvL score', np.r_[0, np.geomspace(0.0001, 1, 101)]) if self._v2 else hist.Bin('ddb', r'Jet BvL score', 100, 0, 1),
-                hist.Bin('ddb', r'Jet BvL score', np.r_[np.linspace(0, 0.15, 31), np.linspace(0.15, 1, 86)]),
+            'signal_opt': hist2.Hist(
+                hist2.axis.StrCategory([], name='dataset', growth=True),
+                hist2.axis.StrCategory([], name='region', growth=True),
+                hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
+                hist2.axis.Variable(optbins, name='ddc', label=r'Jet CvL score'),
+                hist2.axis.Variable(optbins, name='ddcvb', label=r'Jet CvB score'),
+                hist2.storage.Weight(),
             ),
-            'wtag_opt': hist.Hist(
-                'Events',
-                hist.Cat('dataset', 'Dataset'),
-                hist.Cat('region', 'Region'),
-                hist.Cat('systematic', 'Systematic'),
-                hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]), #
-                hist.Bin('msd', r'Jet $m_{sd}$', 46, 40, 201),
-                hist.Bin('n2ddt', 'N2ddt value', [-1, 0, 1]),
-                hist.Bin('ddb', r'Jet ddb score', [0, 0.7, 0.89, 1]),
-                hist.Bin('ddcvb', r'Jet ddcvb score', [0, 0.017, 0.2, 1]),
-                hist.Bin('ddc', r'Jet ddc score', [0, 0.1, 0.44, .83, 1]),
+            'signal_optb': hist2.Hist(
+                hist2.axis.StrCategory([], name='dataset', growth=True),
+                hist2.axis.StrCategory([], name='region', growth=True),
+                hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
+                hist2.axis.Variable(optbins, name='ddb', label=r'Jet BvL score'),
+                hist2.storage.Weight(),
             ),
-            'genresponse_noweight': hist.Hist(
-                'Events',
-                hist.Cat('dataset', 'Dataset'),
-                hist.Cat('region', 'Region'),
-                hist.Cat('systematic', 'Systematic'),
-                hist.Bin('pt', r'Jet $p_{T}$ [GeV]', [450, 500, 550, 600, 675, 800, 1200]),
-                hist.Bin('genpt', r'Jet $p_{T}$ [GeV]', np.geomspace(400, 1200, 60)),
+            'genresponse_noweight': hist2.Hist(
+                hist2.axis.StrCategory([], name='dataset', growth=True),
+                hist2.axis.StrCategory([], name='region', growth=True),
+                hist2.axis.StrCategory([], name='systematic', growth=True),
+                hist2.axis.Variable([450, 500, 550, 600, 675, 800, 1200], name='pt', label=r'Jet $p_{T}$ [GeV]'),
+                hist2.axis.Variable(np.geomspace(400, 1200, 60), name='genpt', label=r'Generated Higgs $p_{T}$ [GeV]'),
+                hist2.storage.Double(),
             ),
-            'genresponse': hist.Hist(
-                'Events',
-                hist.Cat('dataset', 'Dataset'),
-                hist.Cat('region', 'Region'),
-                hist.Cat('systematic', 'Systematic'),
-                hist.Bin('pt', r'Jet $p_{T}$ [GeV]', [450, 500, 550, 600, 675, 800, 1200]),
-                hist.Bin('genpt', r'Generated Higgs $p_{T}$ [GeV]', [200, 300, 450, 650, 7500]),
+            'genresponse': hist2.Hist(
+                hist2.axis.StrCategory([], name='dataset', growth=True),
+                hist2.axis.StrCategory([], name='region', growth=True),
+                hist2.axis.StrCategory([], name='systematic', growth=True),
+                hist2.axis.Variable([450, 500, 550, 600, 675, 800, 1200], name='pt', label=r'Jet $p_{T}$ [GeV]'),
+                hist2.axis.Variable([200, 300, 450, 650, 7500], name='genpt', label=r'Generated Higgs $p_{T}$ [GeV]'),
+                hist2.storage.Weight(),
             ),
-        })
-
-    @property
-    def accumulator(self):
-        return self._accumulator
+        }
 
     def process(self, events):
         dataset = events.metadata['dataset']
         isRealData = not hasattr(events, "genWeight")
-        output = self.accumulator.identity()
 
         if isRealData:
             # Nominal JEC are already applied in data
-            output += self.process_shift(events, None)
-            return output
+            return self.process_shift(events, None)
 
         jec_cache = {}
         nojer = "NOJER" if self._skipJER else ""
         fatjets = fatjet_factory[f"{self._year}mc{nojer}"].build(add_jec_variables(events.FatJet, events.fixedGridRhoFastjetAll), jec_cache)
         jets = jet_factory[f"{self._year}mc{nojer}"].build(add_jec_variables(events.Jet, events.fixedGridRhoFastjetAll), jec_cache)
-        met = met_factory.build(events.MET, jets, jec_cache)
+        met = met_factory.build(events.MET, jets, {})
 
-        output += self.process_shift(update(events, {"Jet": jets, "FatJet": fatjets, "MET": met}), None)
-        output += self.process_shift(update(events, {"Jet": jets.JES_jes.up, "FatJet": fatjets.JES_jes.up, "MET": met.JES_jes.up}), "JESUp")
-        output += self.process_shift(update(events, {"Jet": jets.JES_jes.down, "FatJet": fatjets.JES_jes.down, "MET": met.JES_jes.down}), "JESDown")
+        shifts = [
+            ({"Jet": jets, "FatJet": fatjets, "MET": met}, None),
+            ({"Jet": jets.JES_jes.up, "FatJet": fatjets.JES_jes.up, "MET": met.JES_jes.up}, "JESUp"),
+            ({"Jet": jets.JES_jes.down, "FatJet": fatjets.JES_jes.down, "MET": met.JES_jes.down}, "JESDown"),
+            ({"Jet": jets, "FatJet": fatjets, "MET": met.MET_UnclusteredEnergy.up}, "UESUp"),
+            ({"Jet": jets, "FatJet": fatjets, "MET": met.MET_UnclusteredEnergy.down}, "UESDown"),
+        ]
         if not self._skipJER:
-            output += self.process_shift(update(events, {"Jet": jets.JER.up, "FatJet": fatjets.JER.up, "MET": met.JER.up}), "JERUp")
-            output += self.process_shift(update(events, {"Jet": jets.JER.down, "FatJet": fatjets.JER.down, "MET": met.JER.down}), "JERDown")
-        output += self.process_shift(update(events, {"Jet": jets, "FatJet": fatjets, "MET": met.MET_UnclusteredEnergy.up}), "UESUp")
-        output += self.process_shift(update(events, {"Jet": jets, "FatJet": fatjets, "MET": met.MET_UnclusteredEnergy.down}), "UESDown")
-        return output
+            shifts.extend([
+                ({"Jet": jets.JER.up, "FatJet": fatjets.JER.up, "MET": met.JER.up}, "JERUp"),
+                ({"Jet": jets.JER.down, "FatJet": fatjets.JER.down, "MET": met.JER.down}, "JERDown"),
+            ])
+        return processor.accumulate(self.process_shift(update(events, collections), name) for collections, name in shifts)
 
     def process_shift(self, events, shift_name):
         dataset = events.metadata['dataset']
@@ -252,7 +242,7 @@ class HbbProcessor(processor.ProcessorABC):
         selection = PackedSelection()
         weights = Weights(len(events))
         weights_wtag = copy.deepcopy(weights)
-        output = self.accumulator.identity()
+        output = self.make_output()
         if shift_name is None and not isRealData:
             output['sumw'][dataset] += ak.sum(events.genWeight)
 
@@ -360,9 +350,6 @@ class HbbProcessor(processor.ProcessorABC):
             & (abs(jets.eta) < 2.5)
             & jets.isTight
         ]
-        # Protect again "empty" arrays [None, None, None...]
-        # if ak.sum(candidatejet.phi) == 0.:
-        #     return self.accumulator.identity()
         # only consider first 4 jets to be consistent with old framework
         jets = jets[:, :4]
         dphi = abs(jets.delta_phi(candidatejet))
@@ -386,7 +373,7 @@ class HbbProcessor(processor.ProcessorABC):
             goodelectron = (
                 (events.Electron.pt > 10)
                 & (abs(events.Electron.eta) < 2.5)
-                & (events.Electron.cutBased >= events.Electron.LOOSE)
+                & (events.Electron.cutBased >= events.Electron.VETO)
             )
             nelectrons = ak.sum(goodelectron, axis=1)
 
@@ -395,8 +382,7 @@ class HbbProcessor(processor.ProcessorABC):
                     (events.Tau.pt > 20)
                     & (abs(events.Tau.eta) < 2.3)
                     & events.Tau.idDecayMode
-                    & (events.Tau.rawIso < 5)
-                    & (events.Tau.idMVAoldDM2017v1 >= 16)
+                    & ((events.Tau.idMVAoldDM2017v2 & 2) != 0)
                     & ak.all(events.Tau.metric_table(events.Muon[goodmuon]) > 0.4, axis=2)
                     & ak.all(events.Tau.metric_table(events.Electron[goodelectron]) > 0.4, axis=2)
                 ),
@@ -412,6 +398,8 @@ class HbbProcessor(processor.ProcessorABC):
             ntaus = ak.sum(
                 (events.Tau.pt > 20)
                 & events.Tau.idDecayMode,  # bacon iso looser than Nano selection
+                & ak.all(events.Tau.metric_table(events.Muon[goodmuon]) > 0.4, axis=2)
+                & ak.all(events.Tau.metric_table(events.Electron[goodelectron]) > 0.4, axis=2)
                 axis=1,
             )
 
@@ -433,7 +421,6 @@ class HbbProcessor(processor.ProcessorABC):
         #####
 
         if isRealData :
-            #genflavor = candidatejet.pt - candidatejet.pt  # zeros_like
             genflavor = ak.zeros_like(candidatejet.pt)
         else:
             weights.add('genweight', events.genWeight)
@@ -477,6 +464,8 @@ class HbbProcessor(processor.ProcessorABC):
                 ar = ak.to_numpy(ak.fill_none(val[cut], np.nan))
                 return ar
 
+        import time
+        tic = time.time()
         if shift_name is None:
             for region, cuts in regions.items():
                 # allcuts = set(["id"])
@@ -539,19 +528,6 @@ class HbbProcessor(processor.ProcessorABC):
                 ddcvb=normalize(cvb, cut),
                 weight=weight,
             )
-            if systematic is None:
-                output['wtag_opt'].fill(
-                    dataset=dataset,
-                    region=region,
-                    systematic=sname,
-                    genflavor=normalize(genflavor, cut),
-                    msd=normalize(msd_matched, cut),
-                    n2ddt=normalize(candidatejet.n2ddt, cut),
-                    ddb=normalize(bvl, cut),
-                    ddcvb=normalize(cvb, cut),
-                    ddc=normalize(cvl, cut),
-                    weight=weight_wtag,
-                )
             if not isRealData:
                 if wmod is not None:
                     _custom_weight = events.genWeight[cut] * wmod[cut]
@@ -611,6 +587,8 @@ class HbbProcessor(processor.ProcessorABC):
                 for c in events.LHEWeight.fields[1:]:
                     fill(region, 'LHEWeight_%s' % c, events.LHEWeight[c])
 
+        toc = time.time()
+        output["filltime"] = toc - tic
         if shift_name is None:
             output["weightStats"] = weights.weightStatistics
         return output
