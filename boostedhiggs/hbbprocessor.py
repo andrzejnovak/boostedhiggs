@@ -131,8 +131,8 @@ class HbbProcessor(processor.ProcessorABC):
         else:
             taggerbins = (
                 hist.Bin('ddb', r'Jet ddb score', [0, 0.7, 0.89, 1]),
-                hist.Bin('ddc', r'Jet ddc score', [0, 0.1, 0.44, .83, 1]),
-                hist.Bin('ddcvb', r'Jet ddcvb score', [0, 0.017, 0.2, 1]),
+                hist.Bin('ddc', r'Jet ddc score', [0, 0.34, 0.45, .49, 1]),
+                hist.Bin('ddcvb', r'Jet ddcvb score', [0, 0.03, 0.035, 1]),
             )
         self._accumulator = processor.dict_accumulator({
             # dataset -> sumw
@@ -305,20 +305,17 @@ class HbbProcessor(processor.ProcessorABC):
             & (abs(fatjets.eta) < 2.5)
             & fatjets.isTight  # this is loose in sampleContainer
         ]
+        candidatejet = candidatejet[:, :2] # Only consider first two to match generators
         if self._jet_arbitration == 'pt':
             candidatejet = ak.firsts(candidatejet)
         elif self._jet_arbitration == 'mass':
-            candidatejet = candidatejet[
-                ak.argmax(candidatejet.msdcorr)
-            ]
+            candidatejet = ak.firsts(candidatejet[ak.argmax(candidatejet.msdcorr, axis=1, keepdims=True)])
         elif self._jet_arbitration == 'n2':
-            candidatejet = candidatejet[
-                ak.argmin(candidatejet.n2ddt)
-            ]
+            candidatejet = ak.firsts(candidatejet[ak.argmin(candidatejet.n2ddt, axis=1, keepdims=True)])
         elif self._jet_arbitration == 'ddb':
-            candidatejet = candidatejet[
-                ak.argmax(candidatejet.btagDDBvL)
-            ]
+            candidatejet = ak.firsts(candidatejet[ak.argmax(candidatejet.btagDDBvLV2, axis=1, keepdims=True)])
+        elif self._jet_arbitration == 'ddc':
+            candidatejet = ak.firsts(candidatejet[ak.argmax(candidatejet.btagDDCvLV2, axis=1, keepdims=True)])
         else:
             raise RuntimeError("Unknown candidate jet arbitration")
 
@@ -361,8 +358,8 @@ class HbbProcessor(processor.ProcessorABC):
             selection.add('ddcvbpass', (cvb >= 0.2))
         else:
             selection.add('ddbpass', (bvl >= 0.7))
-            selection.add('ddcpass', (cvl >= 0.44))
-            selection.add('ddcvbpass', (cvb >= 0.017))
+            selection.add('ddcpass', (cvl >= 0.45))
+            selection.add('ddcvbpass', (cvb >= 0.03))
 
         jets = events.Jet
         jets = jets[
@@ -412,17 +409,19 @@ class HbbProcessor(processor.ProcessorABC):
                 axis=1,
             )
         else:
-            nelectrons = ak.sum(
+            goodelectron = (
                 (events.Electron.pt > 10)
                 & (abs(events.Electron.eta) < 2.5)
-                & (events.Electron.cutBased >= events.Electron.LOOSE),
-                axis=1,
+                & (events.Electron.cutBased >= events.Electron.LOOSE)
             )
+            nelectrons = ak.sum(goodelectron, axis=1)
             ntaus = ak.sum(
-                (events.Tau.pt > 20)
-                & events.Tau.idDecayMode,  # bacon iso looser than Nano selection
-                & ak.all(events.Tau.metric_table(events.Muon[goodmuon]) > 0.4, axis=2) # not in base version
-                & ak.all(events.Tau.metric_table(events.Electron[goodelectron]) > 0.4, axis=2) # not in base version
+                (
+                    (events.Tau.pt > 20)
+                    & events.Tau.idDecayMode  # bacon iso looser than Nano selection
+                    & ak.all(events.Tau.metric_table(events.Muon[goodmuon]) > 0.4, axis=2)
+                    & ak.all(events.Tau.metric_table(events.Electron[goodelectron]) > 0.4, axis=2)
+                ),
                 axis=1,
             )
 
