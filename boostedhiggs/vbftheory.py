@@ -96,8 +96,8 @@ class VBFTheoryProcessor(processor.ProcessorABC):
                 hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
                 hist.Bin('pt1', r'Jet $p_{T}$ [GeV]', [400, 450, 500, 550, 600, 675, 800, 1200]),
                 hist.Bin('msd1', r'Jet 1 $m_{sd}$', 23, 40, 201),
-                hist.Bin('ddb1', r'Jet 1 ddb score', [0, 0.64, 0.7, 0.89, 1]),
-                hist.Bin('deta', r'$\Delta \eta$', 14,0,7),
+                hist.Bin('ddb1', r'Jet 1 ddb score', [0, 0.64, 0.89, 1]),
+                hist.Bin('deta', r'$\Delta \eta$', 1,3.5,7),
                 hist.Bin('mjj', r'$m_{jj}$',[500,1000,2000,4000]),
             ),
         })

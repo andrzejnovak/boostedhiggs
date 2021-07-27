@@ -88,9 +88,22 @@ class HbbProcessor(processor.ProcessorABC):
                 hist.Cat('dataset', 'Dataset'),
                 hist.Cat('region', 'Region'),
                 hist.Cat('systematic', 'Systematic'),
+                hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
                 hist.Bin('pt1', r'Jet $p_{T}$ [GeV]', [400, 450, 500, 550, 600, 675, 800, 1200]),
                 hist.Bin('msd1', r'Jet $m_{sd}$', 23, 40, 201),
                 hist.Bin('ddb1', r'Jet ddb score', [0, 0.64, 0.7, 0.89, 1]),
+                hist.Bin('mjj', r'$m_{jj}$ [GeV]',[500,1000,2000,4000,10000]),
+            ),
+            'templates-vbf': hist.Hist(
+                'Events',
+                hist.Cat('dataset', 'Dataset'),
+                hist.Cat('region', 'Region'),
+                hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
+                hist.Bin('ddb1', r'Jet ddb score', [0, 0.64, 0.7, 0.89, 1]),
+                hist.Bin('deta', r'$\Delta \eta$', 14,0,7),
+                hist.Bin('mjj', r'$m_{jj}$ [GeV]',[500,1000,2000,4000,10000]),
+                hist.Bin('qgl1', r'QGL small jet 1', 20,0,1),
+                hist.Bin('qgl2', r'QGL small jet 2', 20,0,1),
             ),
         })
 
@@ -250,8 +263,11 @@ class HbbProcessor(processor.ProcessorABC):
         deta = abs(ak.firsts(jet1).eta - ak.firsts(jet2).eta)
         mjj = ( ak.firsts(jet1) + ak.firsts(jet2) ).mass
 
-        isvbf = ((deta > 3.5) & (mjj > 1000))
+        qgl1 = ak.firsts(jet1.qgl)                                                                                            
+        qgl2 = ak.firsts(jet2.qgl)  
 
+        isvbf = ((deta > 3.5) & (mjj > 1000))
+        isvbf = ak.fill_none(isvbf,False)
         selection.add('isvbf', isvbf)
 
         isnotvbf = ak.fill_none(~isvbf,True)
@@ -373,11 +389,26 @@ class HbbProcessor(processor.ProcessorABC):
                 dataset=dataset,
                 region=region,
                 systematic=sname,
+                genflavor=normalize(genflavor,cut),
                 pt1=normalize(candidatejet.pt, cut),
                 msd1=normalize(msd_matched, cut),
                 ddb1=normalize(ddb, cut),
+                mjj=normalize(mjj, cut),
                 weight=weight,
             )
+
+            if sname == "nominal":
+                output['templates-vbf'].fill(
+                    dataset=dataset,
+                    region=region,
+                    genflavor=normalize(genflavor,cut),
+                    ddb1=normalize(ddb, cut),
+                    deta=normalize(deta,cut),
+                    mjj=normalize(mjj, cut),
+                    qgl1=normalize(qgl1, cut),
+                    qgl2=normalize(qgl2, cut),
+                    weight=weight,
+                )
 
         for region in regions:
             for systematic in systematics:

@@ -92,21 +92,21 @@ class VBFProcessor(processor.ProcessorABC):
                 hist.Cat('systematic', 'Systematic'),
                 hist.Bin('pt1', r'Jet $p_{T}$ [GeV]', [400, 450, 500, 550, 600, 675, 800, 1200]),
                 hist.Bin('msd1', r'Jet 1 $m_{sd}$', 23, 40, 201),
-                hist.Bin('ddb1', r'Jet 1 ddb score', [0, 0.64, 0.7, 0.89, 1]),
-                hist.Bin('deta', r'$\Delta \eta$', 14,0,7),
+                hist.Bin('ddb1', r'Jet 1 ddb score', [0, 0.64, 0.89, 1]),
+                hist.Bin('deta', r'$\Delta \eta$', 1,3.5,7),
                 hist.Bin('mjj', r'$m_{jj}$',[500,1000,2000,4000]),
             ),
-            'templates-vbf-2': hist.Hist(
-                'Events',
-                hist.Cat('dataset', 'Dataset'),
-                hist.Cat('region', 'Region'),
-                hist.Bin('ddb1', r'Jet 1 ddb score', [0, 0.64, 0.7, 0.89, 1]),
-                hist.Bin('msd1', r'Jet 1 $m_{sd}$', 23, 40, 201),
-                hist.Bin('ptj1', r'Small jet 1 $p_{T}$', 10, 0, 2000),
-                hist.Bin('ptj2', r'Small jet 2 $p_{T}$', 10, 0, 2000),
-                hist.Bin('deta', r'$\Delta \eta$', 14,0,7),
-                hist.Bin('mjj', r'$m_{jj}$',[500,1000,2000,4000])
-            ),
+#            'templates-vbf-2': hist.Hist(
+#                'Events',
+#                hist.Cat('dataset', 'Dataset'),
+#                hist.Cat('region', 'Region'),
+#                hist.Bin('ddb1', r'Jet 1 ddb score', [0, 0.64, 0.7, 0.89, 1]),
+#                hist.Bin('msd1', r'Jet 1 $m_{sd}$', 23, 40, 201),
+#                hist.Bin('ptj1', r'Small jet 1 $p_{T}$', 10, 0, 2000),
+#                hist.Bin('ptj2', r'Small jet 2 $p_{T}$', 10, 0, 2000),
+#                hist.Bin('deta', r'$\Delta \eta$', 14,0,7),
+#                hist.Bin('mjj', r'$m_{jj}$',[500,1000,2000,4000])
+#            ),
         })
 
     @property
@@ -396,18 +396,18 @@ class VBFProcessor(processor.ProcessorABC):
                 weight=weight,
             )
 
-            if sname == 'nominal':
-                output['templates-vbf-2'].fill(
-                    dataset=dataset,
-                    region=region,
-                    ddb1=normalize(candidatejet.btagDDBvL, cut),
-                    msd1=normalize(msd_matched, cut),
-                    ptj1=normalize(ak.firsts(jet1.pt), cut),
-                    ptj2=normalize(ak.firsts(jet2.pt), cut),
-                    deta=normalize(deta, cut),
-                    mjj=normalize(mjj, cut),
-                    weight=weight,
-                )
+#            if sname == 'nominal':
+#                output['templates-vbf-2'].fill(
+#                    dataset=dataset,
+#                    region=region,
+#                    ddb1=normalize(candidatejet.btagDDBvL, cut),
+#                    msd1=normalize(msd_matched, cut),
+#                    ptj1=normalize(ak.firsts(jet1.pt), cut),
+#                    ptj2=normalize(ak.firsts(jet2.pt), cut),
+#                    deta=normalize(deta, cut),
+#                    mjj=normalize(mjj, cut),
+#                    weight=weight,
+#                )
 
         for region in regions:
             for systematic in systematics:
