@@ -5,7 +5,7 @@ import awkward
 from coffea import processor, hist, util
 from coffea.lookup_tools.dense_lookup import dense_lookup
 from coffea.btag_tools import BTagScaleFactor
-import awkward as ak
+
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class BTagEfficiency(processor.ProcessorABC):
             hist.Cat('btag', 'BTag WP pass/fail'),
             hist.Bin('flavor', 'Jet hadronFlavour', [0, 4, 5, 6]),
             hist.Bin('pt', 'Jet pT', [20, 30, 50, 70, 100, 140, 200, 300, 600, 1000]),
-            hist.Bin('abseta', 'Jet abseta', [0, 1.4, 2.0, 2.5, 5.0]),
+            hist.Bin('abseta', 'Jet abseta', [0, 1.4, 2.0, 2.5]),
         )
 
     @property
@@ -40,7 +40,7 @@ class BTagEfficiency(processor.ProcessorABC):
     def process(self, events):
         jets = events.Jet[
             (events.Jet.pt > 30.)
-            & (abs(events.Jet.eta) < 5.0)
+            & (abs(events.Jet.eta) < 2.5)
             & (events.Jet.jetId & 2)  # tight id
         ]
 
@@ -49,15 +49,15 @@ class BTagEfficiency(processor.ProcessorABC):
         out = self.accumulator.identity()
         out.fill(
             btag='pass',
-            flavor=ak.flatten(jets[passbtag].hadronFlavour),
-            pt=ak.flatten(jets[passbtag].pt),
-            abseta=ak.flatten(abs(jets[passbtag].eta)),
+            flavor=jets[passbtag].hadronFlavour.flatten(),
+            pt=jets[passbtag].pt.flatten(),
+            abseta=abs(jets[passbtag].eta.flatten()),
         )
         out.fill(
             btag='fail',
-            flavor=ak.flatten(jets[~passbtag].hadronFlavour),
-            pt=ak.flatten(jets[~passbtag].pt),
-            abseta=ak.flatten(abs(jets[~passbtag].eta)),
+            flavor=jets[~passbtag].hadronFlavour.flatten(),
+            pt=jets[~passbtag].pt.flatten(),
+            abseta=abs(jets[~passbtag].eta.flatten()),
         )
         return out
 

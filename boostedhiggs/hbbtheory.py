@@ -3,7 +3,9 @@ import numpy as np
 import awkward as ak
 import json
 import copy
+from collections import defaultdict
 from coffea import processor, hist
+import hist as hist2
 from coffea.analysis_tools import Weights, PackedSelection
 from coffea.lumi_tools import LumiMask
 from boostedhiggs.btag import BTagEfficiency, BTagCorrector
@@ -16,20 +18,23 @@ from boostedhiggs.corrections import (
     corrected_msoftdrop,
     n2ddt_shift,
     powheg_to_nnlops,
-    add_ps_weight,
-    add_scalevar_7pt,
-    add_scalevar_3pt,
-    add_pdf_weight,
     add_pileup_weight,
     add_VJets_NLOkFactor,
     add_VJets_kFactors,
     add_jetTriggerWeight,
     add_jetTriggerSF,
+    add_mutriggerSF,
+    add_mucorrectionsSF,
     jet_factory,
     fatjet_factory,
     add_jec_variables,
     met_factory,
     lumiMasks,
+    # Jennet adds theory variations
+    add_ps_weight,
+    add_scalevar_7pt,
+    add_scalevar_3pt,
+    add_pdf_weight,
 )
 
 
@@ -43,25 +48,41 @@ def update(events, collections):
         out = ak.with_field(out, value, name)
     return out
 
-class HbbTheoryProcessor(processor.ProcessorABC):
-    def __init__(self, year='2017', jet_arbitration='pt', btagV2=False,
-                 nnlops_rew=False, skipJER=False, tightMatch=False, newVjetsKfactor=True,
-        ):
 
+class HbbTheoryProcessor(processor.ProcessorABC):
+    def __init__(self, year='2017', jet_arbitration='pt', tagger='v2',
+                 nnlops_rew=False, skipJER=False, tightMatch=False, newTrigger=True,
+                 newVjetsKfactor=True,
+                 ):
         self._year = year
-        self._nnlops_rew = nnlops_rew # for 2018, reweight POWHEG to NNLOPS
+        self._tagger  = tagger
+#        self._nnlops_rew = nnlops_rew  # for 2018, reweight POWHEG to NNLOPS
         self._jet_arbitration = jet_arbitration
         self._skipJER = skipJER
         self._tightMatch = tightMatch
         self._newVjetsKfactor= newVjetsKfactor
+        self._newTrigger = newTrigger  # Fewer triggers, new maps (2017 only, ~no effect)
+#        self._looseTau = looseTau  # Looser tau veto
 
-        self._btagV2 = btagV2
         self._btagSF = BTagCorrector(year, 'medium')
 
         self._msdSF = {
             '2016': 1.,
             '2017': 0.987,
             '2018': 0.970,
+        }
+
+        self._muontriggers = {
+            '2016': [
+                'Mu50',  # TODO: check
+            ],
+            '2017': [
+                'Mu50',
+                'TkMu50',
+            ],
+            '2018': [
+                'Mu50',  # TODO: check
+            ],
         }
 
         with open('muon_triggers.json') as f:
@@ -71,13 +92,13 @@ class HbbTheoryProcessor(processor.ProcessorABC):
             self._triggers = json.load(f)
 
         self._json_paths = {
-            '2016': 'jsons/Cert_271036-284044_13TeV_23Sep2016ReReco_Collisions16_JSON.txt', 
+            '2016': 'jsons/Cert_271036-284044_13TeV_23Sep2016ReReco_Collisions16_JSON.txt',
             '2017': 'jsons/Cert_294927-306462_13TeV_EOY2017ReReco_Collisions17_JSON_v1.txt',
             '2018': 'jsons/Cert_314472-325175_13TeV_17SeptEarlyReReco2018ABC_PromptEraD_Collisions18_JSON.txt',
         }
 
-        self._accumulator = processor.dict_accumulator({
-            # dataset -> sumw
+        optbins = np.r_[np.linspace(0, 0.15, 30, endpoint=False), np.linspace(0.15, 1, 86)]
+        self.make_output = lambda: {
             'sumw': processor.defaultdict_accumulator(float),
             'cutflow': hist.Hist(
                 'Events',
@@ -86,7 +107,10 @@ class HbbTheoryProcessor(processor.ProcessorABC):
                 hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
                 hist.Bin('cut', 'Cut index', 15, 0, 15),
             ),
-            'btagWeight': hist.Hist('Events', hist.Cat('dataset', 'Dataset'), hist.Bin('val', 'BTag correction', 50, 0, 3)),
+            'btagWeight': hist2.Hist(
+                hist2.axis.Regular(50, 0, 3, name='val', label='BTag correction'),
+                hist2.storage.Weight(),
+            ),
             'templates': hist.Hist(
                 'Events',
                 hist.Cat('dataset', 'Dataset'),
@@ -95,24 +119,17 @@ class HbbTheoryProcessor(processor.ProcessorABC):
                 hist.Bin('genflavor', 'Gen. jet flavor', [0, 1, 2, 3, 4]),
                 hist.Bin('pt1', r'Jet $p_{T}$ [GeV]', [400, 450, 500, 550, 600, 675, 800, 1200]),
                 hist.Bin('msd1', r'Jet $m_{sd}$', 23, 40, 201),
-                hist.Bin('ddb1', r'Jet ddb score', [0, 0.64, 0.7, 0.89, 1]),
-                hist.Bin('mjj', r'$m_{jj}$ [GeV]',[500,1000,2000,4000,10000]),
+                hist.Bin('ddb1', r'Jet ddb score', [0, 0.64, 0.89, 1]),
+                hist.Bin('mjj', r'$m_{jj}$ [GeV]',[500,1000,2000,4000,6000,10000]),
             ),
-        })
-
-    @property
-    def accumulator(self):
-        return self._accumulator
+        }
 
     def process(self, events):
-        dataset = events.metadata['dataset']
         isRealData = not hasattr(events, "genWeight")
-        output = self.accumulator.identity()
 
         if isRealData:
             # Nominal JEC are already applied in data
-            output += self.process_shift(events, None)
-            return output
+            return self.process_shift(events, None)
 
         jec_cache = {}
         nojer = "NOJER" if self._skipJER else ""
@@ -138,18 +155,16 @@ class HbbTheoryProcessor(processor.ProcessorABC):
         dataset = events.metadata['dataset']
         isRealData = not hasattr(events, "genWeight")
         selection = PackedSelection()
-        weights = Weights(len(events))
-        output = self.accumulator.identity()
+        weights = Weights(len(events), storeIndividual=True)
+        output = self.make_output()
         if shift_name is None and not isRealData:
-            output['sumw'][dataset] += ak.sum(events.genWeight)
+            output['sumw'][dataset] = ak.sum(events.genWeight)
 
-        if isRealData:
+        if isRealData or self._newTrigger:
             trigger = np.zeros(len(events), dtype='bool')
-            lumi_mask = lumiMasks[self._year](events.run, events.luminosityBlock)
             for t in self._triggers[self._year]:
                 if t in events.HLT.fields:
                     trigger = trigger | events.HLT[t]
-
             selection.add('trigger', trigger)
             del trigger
         else:
@@ -162,20 +177,20 @@ class HbbTheoryProcessor(processor.ProcessorABC):
 
         if isRealData:
             trigger = np.zeros(len(events), dtype='bool')
-            lumi_mask = lumiMasks[self._year](events.run, events.luminosityBlock)
             for t in self._muontriggers[self._year]:
                 if t in events.HLT.fields:
                     trigger = trigger | events.HLT[t]
             selection.add('muontrigger', trigger)
+            del trigger
         else:
             selection.add('muontrigger', np.ones(len(events), dtype='bool'))
-        
+
         fatjets = events.FatJet
         fatjets['msdcorr'] = corrected_msoftdrop(fatjets)
         fatjets['qcdrho'] = 2 * np.log(fatjets.msdcorr / fatjets.pt)
         fatjets['n2ddt'] = fatjets.n2b1 - n2ddt_shift(fatjets, year=self._year)
         fatjets['msdcorr_full'] = fatjets['msdcorr'] * self._msdSF[self._year]
-        
+
         candidatejet = fatjets[
             # https://github.com/DAZSLE/BaconAnalyzer/blob/master/Analyzer/src/VJetLoader.cc#L269
             (fatjets.pt > 200)
@@ -183,49 +198,59 @@ class HbbTheoryProcessor(processor.ProcessorABC):
             & fatjets.isTight  # this is loose in sampleContainer
         ]
 
-        ddb = candidatejet.btagDDBvL
-        if self._btagV2:
-            ddb = candidatejet.btagDDBvLV2
-
+        candidatejet = candidatejet[:, :2]  # Only consider first two to match generators
         if self._jet_arbitration == 'pt':
             candidatejet = ak.firsts(candidatejet)
         elif self._jet_arbitration == 'mass':
-            candidatejet = candidatejet[
-                ak.argmax(candidatejet.msdcorr)
-            ]
+            candidatejet = ak.firsts(candidatejet[ak.argmax(candidatejet.msdcorr, axis=1, keepdims=True)])
         elif self._jet_arbitration == 'n2':
-            candidatejet = candidatejet[
-                ak.argmin(candidatejet.n2ddt)
-            ]
+            candidatejet = ak.firsts(candidatejet[ak.argmin(candidatejet.n2ddt, axis=1, keepdims=True)])
         elif self._jet_arbitration == 'ddb':
-            candidatejet = candidatejet[
-                ak.argmax(ddb)
-            ]
+            candidatejet = ak.firsts(candidatejet[ak.argmax(candidatejet.btagDDBvLV2, axis=1, keepdims=True)])
+        elif self._jet_arbitration == 'ddc':
+            candidatejet = ak.firsts(candidatejet[ak.argmax(candidatejet.btagDDCvLV2, axis=1, keepdims=True)])
         else:
             raise RuntimeError("Unknown candidate jet arbitration")
 
-        ddb = candidatejet.btagDDBvL
-        if self._btagV2:
-            ddb = candidatejet.btagDDBvLV2
+        if self._tagger == 'v1':
+            bvl = candidatejet.btagDDBvL
+            cvl = candidatejet.btagDDCvL
+            cvb = candidatejet.btagDDCvB
+        elif self._tagger == 'v2':
+            bvl = candidatejet.btagDDBvLV2
+            cvl = candidatejet.btagDDCvLV2
+            cvb = candidatejet.btagDDCvBV2
+        elif self._tagger == 'v3':
+            bvl = candidatejet.particleNetMD_Xbb
+            cvl = candidatejet.particleNetMD_Xcc / (1 - candidatejet.particleNetMD_Xbb)
+            cvb = candidatejet.particleNetMD_Xcc / (candidatejet.particleNetMD_Xcc + candidatejet.particleNetMD_Xbb)
+        elif self._tagger == 'v4':
+            bvl = candidatejet.particleNetMD_Xbb
+            cvl = candidatejet.btagDDCvLV2
+            cvb = candidatejet.particleNetMD_Xcc / (candidatejet.particleNetMD_Xcc + candidatejet.particleNetMD_Xbb)
+        else:
+            raise ValueError("Not an option")
 
         selection.add('minjetkin',
             (candidatejet.pt >= 450)
-            & (candidatejet.msdcorr >= 40.)
-            & (abs(candidatejet.eta) < 2.5)
-        )
-        selection.add('minjetkin_muoncr',
-            (candidatejet.pt >= 400)
-            & (candidatejet.msdcorr >= 40.)
-            & (abs(candidatejet.eta) < 2.5)
-        )
-        selection.add('jetacceptance',
-            (candidatejet.msdcorr >= 40.)
             & (candidatejet.pt < 1200)
+            & (candidatejet.msdcorr >= 40.)
             & (candidatejet.msdcorr < 201.)
+            & (abs(candidatejet.eta) < 2.5)
+        )
+        selection.add('minjetkinmu',
+            (candidatejet.pt >= 400)
+            & (candidatejet.pt < 1200)
+            & (candidatejet.msdcorr >= 40.)
+            & (candidatejet.msdcorr < 201.)
+            & (abs(candidatejet.eta) < 2.5)
         )
         selection.add('jetid', candidatejet.isTight)
         selection.add('n2ddt', (candidatejet.n2ddt < 0.))
-        selection.add('ddbpass', (ddb >= 0.89))
+        if not self._tagger == 'v2':
+            selection.add('ddbpass', (bvl >= 0.89))
+        else:
+            selection.add('ddbpass', (bvl >= 0.64))
 
         jets = events.Jet
         jets = jets[
@@ -233,9 +258,6 @@ class HbbTheoryProcessor(processor.ProcessorABC):
             & (abs(jets.eta) < 5.0)
             & jets.isTight
         ]
-        # Protect again "empty" arrays [None, None, None...]
-        # if ak.sum(candidatejet.phi) == 0.:
-        #     return self.accumulator.identity()
         # only consider first 4 jets to be consistent with old framework
         jets = jets[:, :4]
         dphi = abs(jets.delta_phi(candidatejet))
@@ -256,19 +278,15 @@ class HbbTheoryProcessor(processor.ProcessorABC):
         deta = abs(ak.firsts(jet1).eta - ak.firsts(jet2).eta)
         mjj = ( ak.firsts(jet1) + ak.firsts(jet2) ).mass
 
+        qgl1 = ak.firsts(jet1.qgl)                                                                                            
+        qgl2 = ak.firsts(jet2.qgl)  
+
         isvbf = ((deta > 3.5) & (mjj > 1000))
         isvbf = ak.fill_none(isvbf,False)
         selection.add('isvbf', isvbf)
 
         isnotvbf = ak.fill_none(~isvbf,True)
         selection.add('notvbf', isnotvbf)
-
-        goodelectron = (
-            (events.Electron.pt > 10)
-            & (abs(events.Electron.eta) < 2.5)
-            & (events.Electron.cutBased >= events.Electron.LOOSE)
-        )
-        nelectrons = ak.sum(goodelectron, axis=1)
 
         goodmuon = (
             (events.Muon.pt > 10)
@@ -277,39 +295,36 @@ class HbbTheoryProcessor(processor.ProcessorABC):
             & events.Muon.looseId
         )
         nmuons = ak.sum(goodmuon, axis=1)
+        leadingmuon = ak.firsts(events.Muon[goodmuon])
 
-        goodmuon_cr = (
-            (events.Muon.pt > 55)
-            & (abs(events.Muon.eta) < 2.1)
-            & (events.Muon.pfRelIso04_all < 0.25)
-            & events.Muon.looseId
+        goodelectron = (
+            (events.Electron.pt > 10)
+            & (abs(events.Electron.eta) < 2.5)
+            & (events.Electron.cutBased >= events.Electron.LOOSE)
         )
-        nmuons_cr = ak.sum(goodmuon_cr, axis=1)
-        leadingmuon = ak.firsts(events.Muon[goodmuon_cr])
+        nelectrons = ak.sum(goodelectron, axis=1)
 
         ntaus = ak.sum(
-            (
-                (events.Tau.pt > 20)
-                & (abs(events.Tau.eta) < 2.3)
-                & events.Tau.idDecayMode
-                & (events.Tau.rawIso < 5)
-                & (events.Tau.idDeepTau2017v2p1VSjet)
-                & ak.all(events.Tau.metric_table(events.Muon[goodmuon]) > 0.4, axis=2)
-                & ak.all(events.Tau.metric_table(events.Electron[goodelectron]) > 0.4, axis=2)
-            ),
+            (events.Tau.pt > 20)
+            & events.Tau.idDecayMode  # bacon iso looser than Nano selection
+            & ak.all(events.Tau.metric_table(events.Muon[goodmuon]) > 0.4, axis=2)
+            & ak.all(events.Tau.metric_table(events.Electron[goodelectron]) > 0.4, axis=2),
             axis=1,
         )
 
         selection.add('noleptons', (nmuons == 0) & (nelectrons == 0) & (ntaus == 0))
-        selection.add('noetau', (nelectrons == 0) & (ntaus == 0))
-        selection.add('onemuon', (nmuons_cr == 1))
+        selection.add('onemuon', (nmuons == 1) & (nelectrons == 0) & (ntaus == 0))
+        selection.add('muonkin', (leadingmuon.pt > 55.) & (abs(leadingmuon.eta) < 2.1))
         selection.add('muonDphiAK8', abs(leadingmuon.delta_phi(candidatejet)) > 2*np.pi/3)
 
         if isRealData :
-            genflavor = candidatejet.pt - candidatejet.pt  # zeros_like
+            genflavor = ak.zeros_like(candidatejet.pt)
         else:
             weights.add('genweight', events.genWeight)
+
+            # Jennet adds theory variations
             add_ps_weight(weights, events.PSWeight)
+
             if "LHEPdfWeight" in events.fields:
                 add_pdf_weight(weights,events.LHEPdfWeight)
             else:
@@ -320,6 +335,7 @@ class HbbTheoryProcessor(processor.ProcessorABC):
             else:
                 add_scalevar_7pt(weights,[])
                 add_scalevar_3pt(weights,[])
+
             add_pileup_weight(weights, events.Pileup.nPU, self._year, dataset)
             bosons = getBosons(events.GenPart)
             matchedBoson = candidatejet.nearest(bosons, axis=None, threshold=0.8)
@@ -330,23 +346,32 @@ class HbbTheoryProcessor(processor.ProcessorABC):
             else:
                 genflavor = bosonFlavor(matchedBoson)
             genBosonPt = ak.fill_none(ak.firsts(bosons.pt), 0)
-
             if self._newVjetsKfactor:
                 add_VJets_kFactors(weights, events.GenPart, dataset)
             else:
                 add_VJets_NLOkFactor(weights, genBosonPt, self._year, dataset)
-            add_jetTriggerSF(weights, ak.firsts(fatjets), self._year)
-
             if shift_name is None:
-                output['btagWeight'].fill(dataset=dataset, val=self._btagSF.addBtagWeight(weights, ak4_away))
+                output['btagWeight'].fill(val=self._btagSF.addBtagWeight(weights, ak4_away))
+#            if self._nnlops_rew and dataset in ['GluGluHToCC_M125_13TeV_powheg_pythia8']:
+#                weights.add('minlo_rew', powheg_to_nnlops(ak.to_numpy(genBosonPt)))
+
+            if self._newTrigger:
+                add_jetTriggerSF(weights, ak.firsts(fatjets), self._year, selection)
+            else:
+                add_jetTriggerWeight(weights, candidatejet.msdcorr, candidatejet.pt, self._year)
+
+            add_mutriggerSF(weights, leadingmuon, self._year, selection)
+            add_mucorrectionsSF(weights, leadingmuon, self._year, selection)
+
             logger.debug("Weight statistics: %r" % weights.weightStatistics)
 
         msd_matched = candidatejet.msdcorr * self._msdSF[self._year] * (genflavor > 0) + candidatejet.msdcorr * (genflavor == 0)
 
         regions = {
-            'signal-ggf': ['trigger','lumimask','minjetkin','jetid','jetacceptance','n2ddt','antiak4btagMediumOppHem','met','noleptons','notvbf'],
-            'signal-vbf': ['trigger','lumimask','minjetkin','jetid','jetacceptance','n2ddt','antiak4btagMediumOppHem','met','noleptons','isvbf'],
-            'muoncontrol': ['muontrigger', 'minjetkin_muoncr', 'jetid', 'n2ddt', 'ak4btagMedium08', 'noetau', 'onemuon', 'muonDphiAK8'],
+            'signal-ggf': ['trigger','lumimask','minjetkin','jetid','n2ddt','antiak4btagMediumOppHem','met','noleptons','notvbf'],
+            'signal-vbf': ['trigger','lumimask','minjetkin','jetid','n2ddt','antiak4btagMediumOppHem','met','noleptons','isvbf'],
+            'muoncontrol': ['minjetkinmu', 'jetid', 'n2ddt', 'ak4btagMedium08', 'onemuon', 'muonkin', 'muonDphiAK8', 'muontrigger', 'lumimask'],
+            'noselection': [],
         }
 
         def normalize(val, cut):
@@ -357,17 +382,26 @@ class HbbTheoryProcessor(processor.ProcessorABC):
                 ar = ak.to_numpy(ak.fill_none(val[cut], np.nan))
                 return ar
 
+        import time
+        tic = time.time()
         if shift_name is None:
             for region, cuts in regions.items():
                 allcuts = set([])
                 cut = selection.all(*allcuts)
-                output['cutflow'].fill(dataset=dataset, region=region, genflavor=normalize(genflavor, None),
-                                    cut=0, weight=weights.weight())#, msd=normalize(msd_matched, None))           
+                output['cutflow'].fill(dataset=dataset,
+                                       region=region,
+                                       genflavor=normalize(genflavor, None),
+                                       cut=0,
+                                       weight=weights.weight())
                 for i, cut in enumerate(cuts + ['ddbpass']):
                     allcuts.add(cut)
                     cut = selection.all(*allcuts)
-                    output['cutflow'].fill(dataset=dataset, region=region, genflavor=normalize(genflavor, cut),
-                                        cut=i + 1, weight=weights.weight()[cut])#, msd=normalize(msd_matched, cut))
+#                    print(allcuts)
+                    output['cutflow'].fill(dataset=dataset,
+                                           region=region,
+                                           genflavor=normalize(genflavor, cut),
+                                           cut=i + 1,
+                                           weight=weights.weight()[cut])
 
         if shift_name is None:
             systematics = [None] + list(weights.variations)
@@ -385,7 +419,7 @@ class HbbTheoryProcessor(processor.ProcessorABC):
                     weight = weights.weight()[cut]
             else:
                 weight = weights.weight()[cut] * wmod[cut]
-            
+
             output['templates'].fill(
                 dataset=dataset,
                 region=region,
@@ -393,7 +427,7 @@ class HbbTheoryProcessor(processor.ProcessorABC):
                 genflavor=normalize(genflavor,cut),
                 pt1=normalize(candidatejet.pt, cut),
                 msd1=normalize(msd_matched, cut),
-                ddb1=normalize(ddb, cut),
+                ddb1=normalize(bvl, cut),
                 mjj=normalize(mjj, cut),
                 weight=weight,
             )
@@ -403,12 +437,14 @@ class HbbTheoryProcessor(processor.ProcessorABC):
                 if isRealData and systematic is not None:
                     continue
                 fill(region, systematic)
-#            if shift_name is None and 'GluGluH' in dataset and 'LHEWeight' in events.fields:
-#                for i in range(9):
-#                    fill(region, 'LHEScale_%d' % i, events.LHEScaleWeight[:, i])
-#                for c in events.LHEWeight.fields[1:]:
-#                    fill(region, 'LHEWeight_%s' % c, events.LHEWeight[c])
+            if shift_name is None and 'GluGluH' in dataset and 'LHEWeight' in events.fields:
+                for i in range(9):
+                    fill(region, 'LHEScale_%d' % i, events.LHEScaleWeight[:, i])
+                for c in events.LHEWeight.fields[1:]:
+                    fill(region, 'LHEWeight_%s' % c, events.LHEWeight[c])
 
+        toc = time.time()
+        output["filltime"] = toc - tic
         if shift_name is None:
             output["weightStats"] = weights.weightStatistics
         return output
