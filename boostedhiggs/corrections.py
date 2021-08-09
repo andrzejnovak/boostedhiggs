@@ -50,19 +50,41 @@ def n2ddt_shift(fatjets, year='2017'):
 def powheg_to_nnlops(genpt):
     return compiled['powheg_to_nnlops'](genpt)
 
-# Jennet adds envelope of pdf weights
+# Jennet adds PDF + alpha_S weights
 def add_pdf_weight(weights, pdf_weights):
 
     nom   = np.ones(len(weights.weight()))
     up    = np.ones(len(weights.weight()))
     down  = np.ones(len(weights.weight()))
 
-    if len(pdf_weights) > 0:
-        allweights = [pdf_weights[:,i] for i in range(0,len(pdf_weights[0]))]
-        up = np.maximum.reduce(allweights)
-        down = np.minimum.reduce(allweights)
+    docstring = pdf_weights.__doc__
 
-    weights.add('PDF_weight', nom, up, down)
+    # NNPDF31_nnlo_hessian_pdfas
+    # https://lhapdfsets.web.cern.ch/current/NNPDF31_nnlo_hessian_pdfas/NNPDF31_nnlo_hessian_pdfas.info
+    if "306000 - 306102" in docstring:
+
+        # Hessian PDF weights
+        # Eq. 21 of https://arxiv.org/pdf/1510.03865v1.pdf                                   
+        arg = pdf_weights[:,1:-2]-np.ones((len(weights.weight()),100))
+        summed = ak.sum(np.square(arg),axis=1)
+        pdf_unc = np.sqrt( (1./99.) * summed )
+        weights.add('PDF_weight', nom, pdf_unc + nom)
+
+        # alpha_S weights
+        # Eq. 27 of same ref
+        as_unc = 0.5*(pdf_weights[:,102] - pdf_weights[:,101])
+        weights.add('aS_weight', nom, as_unc + nom)
+
+        # PDF + alpha_S weights
+        # Eq. 28 of same ref
+        pdfas_unc = np.sqrt( np.square(pdf_unc) + np.square(as_unc) )
+        weights.add('PDFaS_weight', nom, pdfas_unc + nom) 
+
+    else:
+        print(docstring)
+        weights.add('aS_weight', nom, up, down)
+        weights.add('PDF_weight', nom, up, down)
+        weights.add('PDFaS_weight', nom, up, down)
 
 # Jennet adds 7 point scale variations
 def add_scalevar_7pt(weights,var_weights):
