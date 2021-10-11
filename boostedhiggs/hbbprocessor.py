@@ -282,8 +282,7 @@ class HbbProcessor(processor.ProcessorABC):
             ),
         }
 
-    def process(self, events):
-        print("HMM")
+    def process(self, events):  
         isRealData = not hasattr(events, "genWeight")
 
         if isRealData:
@@ -313,9 +312,9 @@ class HbbProcessor(processor.ProcessorABC):
         if self._year == "2018":
             _runid = (events.run >= 319077)
             j_mask = ak.where((jets.phi > -1.57) & (jets.phi < -0.87) &
-                              (jets.eta > -2.5) & (jets.eta < 1.3) & _runid, 0.8, 1)
+                              (jets.eta > -2.5) & (jets.eta < 1.3), 0.8, 1)
             fj_mask = ak.where((fatjets.phi > -1.57) & (fatjets.phi < -0.87) &
-                               (fatjets.eta > -2.5) & (fatjets.eta < 1.3) & _runid, 
+                               (fatjets.eta > -2.5) & (fatjets.eta < 1.3), 
                                0.8, 1)
             shift_jets = copy.deepcopy(jets)
             shift_fatjets = copy.deepcopy(fatjets)
