@@ -111,11 +111,6 @@ class BTagCorrector:
         }
         filename = os.path.join(os.path.dirname(__file__), 'data', files[tagger][year])
         self.sf = BTagScaleFactor(filename, workingpoint)
-        # files = {
-        #     '2016': 'btagQCD2016.coffea',
-        #     '2017': 'btagQCD2017.coffea',
-        #     '2018': 'btagQCD2018.coffea',
-        # }
         files = {
             '2016': 'btagEff2016.coffea',
             '2017': 'btagEff2017.coffea',
@@ -123,8 +118,6 @@ class BTagCorrector:
         }
         filename = os.path.join(os.path.dirname(__file__), 'data', files[year])
         btag = util.load(filename).integrate('tagger', tagger).integrate('dataset')
-        # bpass = btag.integrate('btag', 'pass').values()[()]
-        # ball = btag.integrate('btag').values()[()]
         bpass = btag.integrate('btag', 'pass').values()[()]
         ball = btag.integrate('btag').values()[()]
         nom = bpass / numpy.maximum(ball, 1.)
