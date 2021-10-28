@@ -12,14 +12,27 @@ logger = logging.getLogger(__name__)
 
 class BTagEfficiency(processor.ProcessorABC):
     btagWPs = {
-        '2016': {
-            'medium': 0.6321,
+        'deepcsv': {
+            '2016': {
+                'medium': 0.6321,
+            },
+            '2017': {
+                'medium': 0.4941,
+            },
+            '2018': {
+                'medium': 0.4184,
+            },
         },
-        '2017': {
-            'medium': 0.4941,
-        },
-        '2018': {
-            'medium': 0.4184,
+        'deepjet': {
+            '2016': {
+                'medium': 0.3093,
+            },
+            '2017': {
+                'medium': 0.3033,
+            },
+            '2018': {
+                'medium': 0.2770,
+            },
         },
     }
 
@@ -27,6 +40,8 @@ class BTagEfficiency(processor.ProcessorABC):
         self._year = year
         self._accumulator = hist.Hist(
             'Events',
+            hist.Cat('dataset', 'Dataset'),
+            hist.Cat('tagger', 'Tagger'),
             hist.Cat('btag', 'BTag WP pass/fail'),
             hist.Bin('flavor', 'Jet hadronFlavour', [0, 4, 5, 6]),
             hist.Bin('pt', 'Jet pT', [20, 30, 50, 70, 100, 140, 200, 300, 600, 1000]),
@@ -44,21 +59,34 @@ class BTagEfficiency(processor.ProcessorABC):
             & (events.Jet.jetId & 2)  # tight id
         ]
 
-        passbtag = jets.btagDeepB > BTagEfficiency.btagWPs[self._year]['medium']
-
         out = self.accumulator.identity()
-        out.fill(
-            btag='pass',
-            flavor=jets[passbtag].hadronFlavour.flatten(),
-            pt=jets[passbtag].pt.flatten(),
-            abseta=abs(jets[passbtag].eta.flatten()),
-        )
-        out.fill(
-            btag='fail',
-            flavor=jets[~passbtag].hadronFlavour.flatten(),
-            pt=jets[~passbtag].pt.flatten(),
-            abseta=abs(jets[~passbtag].eta.flatten()),
-        )
+        tags = [
+            ('deepcsv', 'btagDeepB', 'medium'),
+            ('deepjet', 'btagDeepFlavB', 'medium'),
+        ]
+
+        for tagger, branch, wp in tags:
+            passbtag = jets[branch] > BTagEfficiency.btagWPs[tagger][self._year][wp]
+
+            out.fill(
+                dataset=events.metadata['dataset'],
+                tagger=tagger,
+                # tagger=f"{tagger}_{wp}",
+                btag='pass',
+                flavor=awkward.flatten(jets[passbtag].hadronFlavour),
+                pt=awkward.flatten(jets[passbtag].pt),
+                abseta=awkward.flatten(abs(jets[passbtag].eta)),
+            )
+            out.fill(
+                dataset=events.metadata['dataset'],
+                tagger=tagger,
+                # tagger=f"{tagger}_{wp}",
+                btag='fail',
+                flavor=awkward.flatten(jets[~passbtag].hadronFlavour),
+                pt=awkward.flatten(jets[~passbtag].pt),
+                abseta=awkward.flatten(abs(jets[~passbtag].eta)),
+            )
+
         return out
 
     def postprocess(self, a):
@@ -66,23 +94,37 @@ class BTagEfficiency(processor.ProcessorABC):
 
 
 class BTagCorrector:
-    def __init__(self, year, workingpoint):
+    def __init__(self, year, tagger, workingpoint):
         self._year = year
-        self._wp = BTagEfficiency.btagWPs[year][workingpoint]
+        self._wp = BTagEfficiency.btagWPs[tagger][year][workingpoint]
         files = {
-            '2016': 'DeepCSV_Moriond17_B_H.csv.gz',
-            '2017': 'DeepCSV_94XSF_V5_B_F.csv.gz',
-            '2018': 'DeepCSV_102XSF_V1.csv.gz',
+            "deepcsv" : {
+                '2016': 'DeepCSV_Moriond17_B_H.csv.gz',
+                '2017': 'DeepCSV_94XSF_V5_B_F.csv.gz',
+                '2018': 'DeepCSV_102XSF_V1.csv.gz',
+            },
+            "deepjet" : {
+                '2016': 'DeepJet_2016LegacySF_WP_V1.csv.gz',
+                '2017': 'DeepFlavour_94XSF_WP_V3_B_F.csv.gz',
+                '2018': 'DeepJet_102XSF_WP_V1.csv.gz',
+            },
         }
-        filename = os.path.join(os.path.dirname(__file__), 'data', files[year])
+        filename = os.path.join(os.path.dirname(__file__), 'data', files[tagger][year])
         self.sf = BTagScaleFactor(filename, workingpoint)
+        # files = {
+        #     '2016': 'btagQCD2016.coffea',
+        #     '2017': 'btagQCD2017.coffea',
+        #     '2018': 'btagQCD2018.coffea',
+        # }
         files = {
-            '2016': 'btagQCD2016.coffea',
-            '2017': 'btagQCD2017.coffea',
-            '2018': 'btagQCD2018.coffea',
+            '2016': 'btagEff2016.coffea',
+            '2017': 'btagEff2017.coffea',
+            '2018': 'btagEff2018.coffea',
         }
         filename = os.path.join(os.path.dirname(__file__), 'data', files[year])
-        btag = util.load(filename)
+        btag = util.load(filename).integrate('tagger', tagger).integrate('dataset')
+        # bpass = btag.integrate('btag', 'pass').values()[()]
+        # ball = btag.integrate('btag').values()[()]
         bpass = btag.integrate('btag', 'pass').values()[()]
         ball = btag.integrate('btag').values()[()]
         nom = bpass / numpy.maximum(ball, 1.)
@@ -91,9 +133,9 @@ class BTagCorrector:
         self.eff_statUp = dense_lookup(up, [ax.edges() for ax in btag.axes()[1:]])
         self.eff_statDn = dense_lookup(dn, [ax.edges() for ax in btag.axes()[1:]])
 
-    def addBtagWeight(self, weights, jets):
+    def addBtagWeight(self, weights, jets, tagger_branch):
         abseta = abs(jets.eta)
-        passbtag = jets.btagDeepB > self._wp
+        passbtag = jets[tagger_branch] > self._wp
 
         # https://twiki.cern.ch/twiki/bin/viewauth/CMS/BTagSFMethods#1a_Event_reweighting_using_scale
         def combine(eff, sf):
@@ -126,7 +168,8 @@ class BTagCorrector:
 
 
 if __name__ == '__main__':
-    b = BTagCorrector('2017', 'medium')
+    tagger = 'deepcsv'
+    b = BTagCorrector('2017', tagger, 'medium')
     b.sf.eval('central', numpy.array([0, 1, 2]), numpy.array([-2.3, 2., 0.]), numpy.array([20.1, 300., 10.]))
     b.sf.eval('down_uncorrelated', numpy.array([2, 2, 2]), numpy.array([-2.6, 2.9, 0.]), numpy.array([20.1, 300., 1000.]))
     import awkward as ak
@@ -134,5 +177,5 @@ if __name__ == '__main__':
     import pickle
     bb = pickle.loads(pickle.dumps(b))
     bb.sf.eval('central', ak.Array([[0], [1, 2]]), ak.Array([[-2.3], [2., 0.]]), ak.Array([[20.1], [300., 10.]]))
-    b2 = BTagCorrector('2016', 'medium')
-    b3 = BTagCorrector('2018', 'medium')
+    b2 = BTagCorrector('2016', tagger, 'medium')
+    b3 = BTagCorrector('2018', tagger, 'medium')

@@ -20,6 +20,8 @@ from boostedhiggs.corrections import (
     powheg_to_nnlops,
     add_ps_weight,
     add_pdf_weight,
+    add_scalevar_7pt,
+    add_scalevar_3pt,
     add_pileup_weight,
     add_VJets_NLOkFactor,
     add_VJets_kFactors,
@@ -49,7 +51,7 @@ def update(events, collections):
 class HbbProcessor(processor.ProcessorABC):
     def __init__(self, year='2017', jet_arbitration='pt', tagger='v2',
                  nnlops_rew=False, skipJER=False, tightMatch=False, newTrigger=False, looseTau=False,
-                 newVjetsKfactor=False,
+                 newVjetsKfactor=False, ak4tagger='deepcsv',
                  ):
         self._year = year
         self._tagger  = tagger
@@ -60,8 +62,16 @@ class HbbProcessor(processor.ProcessorABC):
         self._newVjetsKfactor= newVjetsKfactor
         self._newTrigger = newTrigger  # Fewer triggers, new maps (2017 only, ~no effect)
         self._looseTau = looseTau  # Looser tau veto
+        self._ak4tagger = ak4tagger
 
-        self._btagSF = BTagCorrector(year, 'medium')
+        if self._ak4tagger == 'deepcsv':
+            self._ak4tagBranch = 'btagDeepB'
+        elif self._ak4tagger == 'deepjet':
+            self._ak4tagBranch = 'btagDeepFlavB'
+        else:
+            raise NotImplementedError()
+
+        self._btagSF = BTagCorrector(year, self._ak4tagger, 'medium')
 
         self._msdSF = {
             '2016': 1.,
@@ -448,9 +458,12 @@ class HbbProcessor(processor.ProcessorABC):
         # only consider first 4 jets to be consistent with old framework
         jets = jets[:, :4]
         dphi = abs(jets.delta_phi(candidatejet))
-        selection.add('antiak4btagMediumOppHem', ak.max(jets[dphi > np.pi / 2].btagDeepB, axis=1, mask_identity=False) < BTagEfficiency.btagWPs[self._year]['medium'])
+        selection.add('antiak4btagMediumOppHem', 
+                      ak.max(jets[dphi > np.pi / 2][self._ak4tagBranch], axis=1, mask_identity=False) 
+                        < BTagEfficiency.btagWPs[self._ak4tagger][self._year]['medium'])
         ak4_away = jets[dphi > 0.8]
-        selection.add('ak4btagMedium08', ak.max(ak4_away.btagDeepB, axis=1, mask_identity=False) > BTagEfficiency.btagWPs[self._year]['medium'])
+        selection.add('ak4btagMedium08', ak.max(ak4_away[self._ak4tagBranch], axis=1, mask_identity=False) 
+                                            > BTagEfficiency.btagWPs[self._ak4tagger][self._year]['medium'])
 
         met = events.MET
         selection.add('met', met.pt < 140.)
@@ -506,13 +519,16 @@ class HbbProcessor(processor.ProcessorABC):
 
         # W-Tag (Tag and Probe)
         # tag side
-        selection.add('ak4btagMediumOppHem', ak.max(jets[dphi > np.pi / 2].btagDeepB, axis=1, mask_identity=False) > BTagEfficiency.btagWPs[self._year]['medium'])
+        selection.add('ak4btagMediumOppHem', 
+                      ak.max(jets[dphi > np.pi / 2][self._ak4tagBranch], axis=1, mask_identity=False) 
+                        > BTagEfficiency.btagWPs[self._ak4tagger][self._year]['medium']
+                      )
         selection.add('met40p', met.pt > 40.)
         selection.add('tightMuon', (leadingmuon.tightId) & (leadingmuon.pt > 53.))
         selection.add('ptrecoW', (leadingmuon + met).pt > 250.)
         selection.add('ptrecoW200', (leadingmuon + met).pt > 200.)
         selection.add('ak4btagNearMu', leadingmuon.delta_r(leadingmuon.nearest(ak4_away, axis=None)) < 2.0 )
-        _bjets = jets.btagDeepB > BTagEfficiency.btagWPs[self._year]['medium']
+        _bjets = jets[self._ak4tagBranch] > BTagEfficiency.btagWPs[self._ak4tagger][self._year]['medium']
         _nearAK8 = jets.delta_r(candidatejet)  < 0.8
         _nearMu = jets.delta_r(ak.firsts(events.Muon))  < 0.3
         selection.add('ak4btagOld', ak.sum(_bjets & ~_nearAK8 & ~_nearMu, axis=1) >= 1)
@@ -533,6 +549,12 @@ class HbbProcessor(processor.ProcessorABC):
                 add_pdf_weight(weights, events.LHEPdfWeight)
             else:
                 add_pdf_weight(weights, None)
+            if "LHEScaleWeight" in events.fields:
+                add_scalevar_7pt(weights, events.LHEScaleWeight)
+                add_scalevar_3pt(weights, events.LHEScaleWeight)
+            else:
+                add_scalevar_7pt(weights,[])
+                add_scalevar_3pt(weights,[])
             add_pileup_weight(weights, events.Pileup.nPU, self._year, dataset)
             bosons = getBosons(events.GenPart)
             matchedBoson = candidatejet.nearest(bosons, axis=None, threshold=0.8)
@@ -548,7 +570,7 @@ class HbbProcessor(processor.ProcessorABC):
             else:
                 add_VJets_NLOkFactor(weights, genBosonPt, self._year, dataset)
             if shift_name is None:
-                output['btagWeight'].fill(val=self._btagSF.addBtagWeight(weights, ak4_away))
+                output['btagWeight'].fill(val=self._btagSF.addBtagWeight(weights, ak4_away, self._ak4tagBranch))
             if self._nnlops_rew and dataset in ['GluGluHToCC_M125_13TeV_powheg_pythia8']:
                 weights.add('minlo_rew', powheg_to_nnlops(ak.to_numpy(genBosonPt)))
 

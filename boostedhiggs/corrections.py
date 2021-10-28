@@ -16,7 +16,12 @@ with importlib.resources.path("boostedhiggs.data", "corrections.pkl.gz") as path
 
 # hotfix some crazy large weights
 compiled['2017_pileupweight']._values = np.minimum(5, compiled['2017_pileupweight']._values)
+compiled['2017_pileupweight_puUp']._values = np.minimum(5, compiled['2017_pileupweight_puUp']._values)
+compiled['2017_pileupweight_puDown']._values = np.minimum(5, compiled['2017_pileupweight_puDown']._values)
 compiled['2018_pileupweight']._values = np.minimum(5, compiled['2018_pileupweight']._values)
+compiled['2018_pileupweight_puUp']._values = np.minimum(5, compiled['2018_pileupweight_puUp']._values)
+compiled['2018_pileupweight_puDown']._values = np.minimum(5, compiled['2018_pileupweight_puDown']._values)
+
 
 with importlib.resources.path("boostedhiggs.data", 'powhegToMinloPtCC.coffea') as filename:
     compiled['powheg_to_nnlops'] = util.load(filename)
@@ -101,6 +106,39 @@ def add_ps_weight(weights, ps_weights):
 
     weights.add('UEPS_ISR', nom, up_isr, down_isr)
     weights.add('UEPS_FSR', nom, up_fsr, down_fsr)
+
+
+# Jennet adds 7 point scale variations
+def add_scalevar_7pt(weights,var_weights):
+
+    nom   = np.ones(len(weights.weight()))
+    up    = np.ones(len(weights.weight()))
+    down  = np.ones(len(weights.weight()))
+ 
+    if len(var_weights) > 0:
+        if len(var_weights[0]) == 9: 
+            up = np.maximum.reduce([var_weights[:,1],var_weights[:,2],var_weights[:,3],var_weights[:,4],var_weights[:,6],var_weights[:,8]])
+            down = np.minimum.reduce([var_weights[:,1],var_weights[:,2],var_weights[:,3],var_weights[:,4],var_weights[:,6],var_weights[:,8]])
+        elif len(var_weights[0]) > 1:
+            print("Scale variation vector has length ", len(var_weights[0]))
+
+    weights.add('scalevar_7pt', nom, up, down)
+
+# Jennet adds 3 point scale variations
+def add_scalevar_3pt(weights,var_weights):
+
+    nom   = np.ones(len(weights.weight()))
+    up    = np.ones(len(weights.weight()))
+    down  = np.ones(len(weights.weight()))
+
+    if len(var_weights) > 0:
+        if len(var_weights[0]) == 9:
+            up = np.maximum(var_weights[:,4], var_weights[:,8])
+            down = np.minimum(var_weights[:,4], var_weights[:,8])
+        elif len(var_weights[0]) > 1:
+            print("Scale variation vector has length ", len(var_weights[0]))
+
+    weights.add('scalevar_3pt', nom, up, down)
 
 
 def add_pileup_weight(weights, nPU, year='2017', dataset=None):
