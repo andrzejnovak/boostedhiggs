@@ -161,6 +161,35 @@ def add_pileup_weight(weights, nPU, year='2017', dataset=None):
             compiled[f'{year}_pileupweight_puDown'](nPU),
         )
 
+with importlib.resources.path("boostedhiggs.data", "EWHiggsCorrections.json") as filename:
+    hew_kfactors = correctionlib.CorrectionSet.from_file(str(filename))
+
+def add_HiggsEW_kFactors(weights, genpart, dataset):
+    """EW Higgs corrections"""
+    def get_hpt():
+        boson = ak.firsts(genpart[
+            (genpart.pdgId == 25)
+            & genpart.hasFlags(["fromHardProcess", "isLastCopy"])
+        ])
+        return np.array(ak.fill_none(boson.pt, 0.))
+
+    if "VBF" in dataset:
+        hpt = get_hpt()
+        ewkcorr = hew_kfactors["VBF_EW"]
+        ewknom = ewkcorr.evaluate(hpt)
+        weights.add("VBF_EW", ewknom)
+
+    if "WplusH" in dataset or "WminusH" in dataset or "ZH" in dataset:
+        hpt = get_hpt()
+        ewkcorr = hew_kfactors["VH_EW"]
+        ewknom = ewkcorr.evaluate(hpt)
+        weights.add("VH_EW", ewknom)
+
+    if "ttH" in dataset:
+        hpt = get_hpt()
+        ewkcorr = hew_kfactors["ttH_EW"]
+        ewknom = ewkcorr.evaluate(hpt)
+        weights.add("ttH_EW", ewknom)
 
 def add_VJets_NLOkFactor(weights, genBosonPt, year, dataset):
     if year == '2017' and 'ZJetsToQQ_HT' in dataset:
@@ -262,9 +291,9 @@ def add_jetTriggerWeight(weights, jet_msd, jet_pt, year):
     weights.add('jet_trigger', nom, up, down)
 
 
-with importlib.resources.path("boostedhiggs.data", "fatjet_triggerSF.json") as filename:
+with importlib.resources.path("boostedhiggs.data", "fatjet_triggerSFplus.json") as filename:
     jet_triggerSF = correctionlib.CorrectionSet.from_file(str(filename))
-
+    
 
 def add_jetTriggerSF(weights, leadingjet, year, selection):
     def mask(w):

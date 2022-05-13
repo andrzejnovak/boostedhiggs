@@ -13,6 +13,7 @@ from boostedhiggs.common import (
     getBosons,
     bosonFlavor,
     pass_json_array,
+    runmap,
 )
 from boostedhiggs.corrections import (
     corrected_msoftdrop,
@@ -25,6 +26,7 @@ from boostedhiggs.corrections import (
     add_pileup_weight,
     add_VJets_NLOkFactor,
     add_VJets_kFactors,
+    add_HiggsEW_kFactors,
     add_jetTriggerWeight,
     add_jetTriggerSF,
     add_mutriggerSF,
@@ -49,12 +51,14 @@ def update(events, collections):
 
 
 class HbbProcessor(processor.ProcessorABC):
-    def __init__(self, year='2017', jet_arbitration='pt', tagger='v2',
+    def __init__(self, year='2017', systematics=True, jet_arbitration='pt', tagger='v2',
                  nnlops_rew=False, skipJER=False, tightMatch=False, newTrigger=False, looseTau=False,
-                 newVjetsKfactor=False, ak4tagger='deepcsv',
+                 newVjetsKfactor=False, ak4tagger='deepcsv', skipRunB=False, finebins=False,
+                 ewkHcorr=False,
                  ):
         self._year = year
         self._tagger  = tagger
+        self.systematics = systematics
         self._nnlops_rew = nnlops_rew  # for 2018, reweight POWHEG to NNLOPS
         self._jet_arbitration = jet_arbitration
         self._skipJER = skipJER
@@ -62,7 +66,10 @@ class HbbProcessor(processor.ProcessorABC):
         self._newVjetsKfactor= newVjetsKfactor
         self._newTrigger = newTrigger  # Fewer triggers, new maps (2017 only, ~no effect)
         self._looseTau = looseTau  # Looser tau veto
+        self._ewkHcorr = ewkHcorr
         self._ak4tagger = ak4tagger
+        self._skipRunB = skipRunB
+        self._finebins = finebins
 
         if self._ak4tagger == 'deepcsv':
             self._ak4tagBranch = 'btagDeepB'
@@ -164,7 +171,7 @@ class HbbProcessor(processor.ProcessorABC):
                     'HBHENoiseIsoFilter',
                     'EcalDeadCellTriggerPrimitiveFilter',
                     'BadPFMuonFilter',
-                    'eeBadScFilter',
+                    # 'eeBadScFilter',
                     'ecalBadCalibFilterV2',
                 ],
             },
@@ -186,7 +193,7 @@ class HbbProcessor(processor.ProcessorABC):
                     'HBHENoiseIsoFilter',
                     'EcalDeadCellTriggerPrimitiveFilter',
                     'BadPFMuonFilter',
-                    'eeBadScFilter',
+                    # 'eeBadScFilter',
                     'ecalBadCalibFilterV2',
                 ],
             },
@@ -206,31 +213,49 @@ class HbbProcessor(processor.ProcessorABC):
             )
         else:
             taggerbins = (
-                hist2.axis.Variable([0, 0.7, 0.89, 1], name='ddb', label=r'Jet ddb score', flow=False),
-                hist2.axis.Variable([0, 0.34, .45, 0.49, 1], name='ddc', label=r'Jet ddc score', flow=False),
-                hist2.axis.Variable([0, 0.03, 0.035, 1], name='ddcvb', label=r'Jet ddcvb score', flow=False),
+                # hist2.axis.Variable([0, 0.7, 0.89, 1], name='ddb', label=r'Jet ddb score', flow=False),
+                # hist2.axis.Variable([0, 0.34, .45, 0.49, 1], name='ddc', label=r'Jet ddc score', flow=False),
+                # hist2.axis.Variable([0, 0.03, 0.035, 1], name='ddcvb', label=r'Jet ddcvb score', flow=F
+                hist2.axis.Variable([0, 0.7, 1], name='ddb', label=r'Jet ddb score', flow=False),
+                hist2.axis.Variable([0, 0.4, 0.45, 0.5, 0.7, 1], name='ddc', label=r'Jet ddc score', flow=False),
+                hist2.axis.Variable([0, 0.01, 0.03, 0.1, 1], name='ddcvb', label=r'Jet ddcvb score', flow=False),
+
             )
+        if self._finebins:
+            mass_bins = hist2.axis.Regular(200, 40, 200, name='msd', label=r'Jet $m_{sd}$')
+            pt_bins = hist2.axis.Variable([450, 475, 500, 550, 600, 675, 800, 1200], name='pt', label=r'Jet $p_{T}$ [GeV]')
+        else:
+            mass_bins = hist2.axis.Regular(23, 40, 201, name='msd', label=r'Jet $m_{sd}$', flow=False)
+            pt_bins = hist2.axis.Variable([450, 475, 500, 550, 600, 675, 800, 1200], name='pt', label=r'Jet $p_{T}$ [GeV]', flow=False)
+        gen_axis = hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor')
 
         optbins = np.r_[np.linspace(0, 0.15, 30, endpoint=False), np.linspace(0.15, 1, 86)]
         self.make_output = lambda: {
             'sumw': 0.,
+            'to_check': {
+                "mass" : processor.column_accumulator(np.array([])),
+                "fname" : processor.column_accumulator(np.array([])),
+                "run" : processor.column_accumulator(np.array([])),
+                "luminosityBlock" : processor.column_accumulator(np.array([])),
+                "event" : processor.column_accumulator(np.array([])),
+            },
             'cutflow_msd': hist2.Hist(
                 hist2.axis.StrCategory([], name='region', growth=True),
-                hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
+                gen_axis,
                 hist2.axis.IntCategory([0, 1, 2, 3], name='cut', label='Cut index', growth=True),
-                hist2.axis.Regular(23, 40, 201, name='msd', label=r'Jet $m_{sd}$'),
+                mass_bins,
                 hist2.storage.Weight(),
             ),
             'cutflow_eta': hist2.Hist(
                 hist2.axis.StrCategory([], name='region', growth=True),
-                hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
+                gen_axis,
                 hist2.axis.IntCategory([0, 1, 2, 3], name='cut', label='Cut index', growth=True),
                 hist2.axis.Regular(40, -2.5, 2.5, name='eta', label=r'Jet $\eta$'),
                 hist2.storage.Weight(),
             ),
             'cutflow_pt': hist2.Hist(
                 hist2.axis.StrCategory([], name='region', growth=True),
-                hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
+                gen_axis,
                 hist2.axis.IntCategory([0, 1, 2, 3], name='cut', label='Cut index', growth=True),
                 hist2.axis.Regular(100, 400, 1200, name='pt', label=r'Jet $p_{T}$ [GeV]'),
                 hist2.storage.Weight(),
@@ -247,19 +272,31 @@ class HbbProcessor(processor.ProcessorABC):
             'templates': hist2.Hist(
                 hist2.axis.StrCategory([], name='region', growth=True),
                 hist2.axis.StrCategory([], name='systematic', growth=True),
-                hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
-                hist2.axis.Variable([450, 500, 550, 600, 675, 800, 1200], name='pt', label=r'Jet $p_{T}$ [GeV]'),
-                hist2.axis.Regular(23, 40, 201, name='msd', label=r'Jet $m_{sd}$'),
+                hist2.axis.StrCategory([], name='runid', growth=True),
+                gen_axis,
+                pt_bins,
+                mass_bins,
                 *taggerbins,
                 hist2.storage.Weight(),
             ),
+            # 'etaphi': hist2.Hist(
+            #     hist2.axis.StrCategory([], name='region', growth=True),
+            #     hist2.axis.StrCategory([], name='systematic', growth=True),
+            #     hist2.axis.StrCategory([], name='runid', growth=True),
+            #     hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
+            #     hist2.axis.Regular(30, -2.5, 2.5, name='eta', label=r'Jet $\eta$'),
+            #     hist2.axis.Regular(30, -3.14, 3.14, name='phi', label=r'Jet $\phi$'),
+            #     pt_bins,
+            #     *taggerbins[1:],
+            #     hist2.storage.Weight(),
+            # ),
             'wtag': hist2.Hist(
                 hist2.axis.StrCategory([], name='region', growth=True),
                 hist2.axis.StrCategory([], name='systematic', growth=True),
-                hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
-                hist2.axis.Variable([-1, 0, 1], name='n2ddt', label=r'N2ddt value'),
-                # hist2.axis.Variable([200, 450, 1200], name='pt', label=r'Jet $p_{T}$ [GeV]'),
-                hist2.axis.Regular(46, 40, 201, name='msd', label=r'Jet $m_{sd}$'),
+                gen_axis,
+                hist2.axis.Variable([-1, 0, 1], name='n2ddt', label=r'N2ddt value', flow=False),
+                hist2.axis.Variable([200, 250, 300, 350, 400, 450, 1200], name='pt', label=r'Jet $p_{T}$ [GeV]'),
+                hist2.axis.Regular(46, 40, 201, name='msd', label=r'Jet $m_{sd}$', flow=False),
                 *taggerbins[1:],
                 hist2.storage.Weight(),
             ),
@@ -268,12 +305,14 @@ class HbbProcessor(processor.ProcessorABC):
                 hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
                 hist2.axis.Variable(optbins, name='ddc', label=r'Jet CvL score'),
                 hist2.axis.Variable(optbins, name='ddcvb', label=r'Jet CvB score'),
+                hist2.axis.Variable([40, 70, 80, 90, 100, 110, 120, 130, 140], name='msd', label=r'Jet $m_{sd}$'),
                 hist2.storage.Weight(),
             ),
             'signal_optb': hist2.Hist(
                 hist2.axis.StrCategory([], name='region', growth=True),
                 hist2.axis.IntCategory([0, 1, 2, 3], name='genflavor'),
                 hist2.axis.Variable(optbins, name='ddb', label=r'Jet BvL score'),
+                hist2.axis.Variable([40, 70, 80, 90, 100, 110, 120, 130, 140], name='msd', label=r'Jet $m_{sd}$'),
                 hist2.storage.Weight(),
             ),
             'genresponse_noweight': hist2.Hist(
@@ -294,7 +333,7 @@ class HbbProcessor(processor.ProcessorABC):
 
     def process(self, events):  
         isRealData = not hasattr(events, "genWeight")
-
+        
         if isRealData:
             # Nominal JEC are already applied in data
             return self.process_shift(events, None)
@@ -308,32 +347,35 @@ class HbbProcessor(processor.ProcessorABC):
 
         shifts = [
             ({"Jet": jets, "FatJet": fatjets, "MET": met}, None),
-            ({"Jet": jets.JES_jes.up, "FatJet": fatjets.JES_jes.up, "MET": met.JES_jes.up}, "JESUp"),
-            ({"Jet": jets.JES_jes.down, "FatJet": fatjets.JES_jes.down, "MET": met.JES_jes.down}, "JESDown"),
-            ({"Jet": jets, "FatJet": fatjets, "MET": met.MET_UnclusteredEnergy.up}, "UESUp"),
-            ({"Jet": jets, "FatJet": fatjets, "MET": met.MET_UnclusteredEnergy.down}, "UESDown"),
         ]
-        if not self._skipJER:
-            shifts.extend([
-                ({"Jet": jets.JER.up, "FatJet": fatjets.JER.up, "MET": met.JER.up}, "JERUp"),
-                ({"Jet": jets.JER.down, "FatJet": fatjets.JER.down, "MET": met.JER.down}, "JERDown"),
-            ])
+        if self.systematics:
+            shifts += [
+                ({"Jet": jets.JES_jes.up, "FatJet": fatjets.JES_jes.up, "MET": met.JES_jes.up}, "JESUp"),
+                ({"Jet": jets.JES_jes.down, "FatJet": fatjets.JES_jes.down, "MET": met.JES_jes.down}, "JESDown"),
+                ({"Jet": jets, "FatJet": fatjets, "MET": met.MET_UnclusteredEnergy.up}, "UESUp"),
+                ({"Jet": jets, "FatJet": fatjets, "MET": met.MET_UnclusteredEnergy.down}, "UESDown"),
+            ]
+            if not self._skipJER:
+                shifts.extend([
+                    ({"Jet": jets.JER.up, "FatJet": fatjets.JER.up, "MET": met.JER.up}, "JERUp"),
+                    ({"Jet": jets.JER.down, "FatJet": fatjets.JER.down, "MET": met.JER.down}, "JERDown"),
+                ])
         # HEM15/16 issue
-        if self._year == "2018":
-            _runid = (events.run >= 319077)
-            j_mask = ak.where((jets.phi > -1.57) & (jets.phi < -0.87) &
-                              (jets.eta > -2.5) & (jets.eta < 1.3), 0.8, 1)
-            fj_mask = ak.where((fatjets.phi > -1.57) & (fatjets.phi < -0.87) &
-                               (fatjets.eta > -2.5) & (fatjets.eta < 1.3), 
-                               0.8, 1)
-            shift_jets = copy.deepcopy(jets)
-            shift_fatjets = copy.deepcopy(fatjets)
-            for collection, mask in zip([shift_jets, shift_fatjets], [j_mask, fj_mask]):
-                collection["pt"] = mask * collection.pt
-                collection["mass"] = mask * collection.mass
-            shifts.extend([
-                ({"Jet": shift_jets, "FatJet": shift_fatjets, "MET": met}, "HEM18"),
-            ])
+        # if self._year == "2018":
+        #     _runid = (events.run >= 319077)
+        #     j_mask = ak.where((jets.phi > -1.57) & (jets.phi < -0.87) &
+        #                       (jets.eta > -2.5) & (jets.eta < 1.3), 0.8, 1)
+        #     fj_mask = ak.where((fatjets.phi > -1.57) & (fatjets.phi < -0.87) &
+        #                        (fatjets.eta > -2.5) & (fatjets.eta < 1.3), 
+        #                        0.8, 1)
+        #     shift_jets = copy.deepcopy(jets)
+        #     shift_fatjets = copy.deepcopy(fatjets)
+        #     for collection, mask in zip([shift_jets, shift_fatjets], [j_mask, fj_mask]):
+        #         collection["pt"] = mask * collection.pt
+        #         collection["mass"] = mask * collection.mass
+        #     shifts.extend([
+        #         ({"Jet": shift_jets, "FatJet": shift_fatjets, "MET": met}, "HEM18"),
+        #     ])
 
         return processor.accumulate(self.process_shift(update(events, collections), name) for collections, name in shifts)
 
@@ -360,6 +402,11 @@ class HbbProcessor(processor.ProcessorABC):
             selection.add('lumimask', lumiMasks[self._year](events.run, events.luminosityBlock))
         else:
             selection.add('lumimask', np.ones(len(events), dtype='bool'))
+
+        if isRealData and self._skipRunB and self._year == '2017':
+            selection.add('dropB', events.run > 299329)
+        else:
+            selection.add('dropB', np.ones(len(events), dtype='bool'))
 
         if isRealData:
             trigger = np.zeros(len(events), dtype='bool')
@@ -431,8 +478,17 @@ class HbbProcessor(processor.ProcessorABC):
             & (candidatejet.msdcorr < 201.)
             & (abs(candidatejet.eta) < 2.5)
         )
+        selection.add('_strict_mass', (candidatejet.msdcorr > 85) & (candidatejet.msdcorr < 130))
+        selection.add('_high_score', cvl > 0.8)
         selection.add('minjetkinmu',
             (candidatejet.pt >= 400)
+            & (candidatejet.pt < 1200)
+            & (candidatejet.msdcorr >= 40.)
+            & (candidatejet.msdcorr < 201.)
+            & (abs(candidatejet.eta) < 2.5)
+        )
+        selection.add('minjetkinw',
+            (candidatejet.pt >= 200)
             & (candidatejet.pt < 1200)
             & (candidatejet.msdcorr >= 40.)
             & (candidatejet.msdcorr < 201.)
@@ -462,7 +518,7 @@ class HbbProcessor(processor.ProcessorABC):
                       ak.max(jets[dphi > np.pi / 2][self._ak4tagBranch], axis=1, mask_identity=False) 
                         < BTagEfficiency.btagWPs[self._ak4tagger][self._year]['medium'])
         ak4_away = jets[dphi > 0.8]
-        selection.add('ak4btagMedium08', ak.max(ak4_away[self._ak4tagBranch], axis=1, mask_identity=False) 
+        selection.add('ak4btagMedium08', ak.max(ak4_away[self._ak4tagBranch], axis=1, mask_identity=False)
                                             > BTagEfficiency.btagWPs[self._ak4tagger][self._year]['medium'])
 
         met = events.MET
@@ -525,21 +581,34 @@ class HbbProcessor(processor.ProcessorABC):
                       )
         selection.add('met40p', met.pt > 40.)
         selection.add('tightMuon', (leadingmuon.tightId) & (leadingmuon.pt > 53.))
-        selection.add('ptrecoW', (leadingmuon + met).pt > 250.)
+        # selection.add('ptrecoW', (leadingmuon + met).pt > 250.)
         selection.add('ptrecoW200', (leadingmuon + met).pt > 200.)
         selection.add('ak4btagNearMu', leadingmuon.delta_r(leadingmuon.nearest(ak4_away, axis=None)) < 2.0 )
         _bjets = jets[self._ak4tagBranch] > BTagEfficiency.btagWPs[self._ak4tagger][self._year]['medium']
+        # _nearAK8 = jets.delta_r(candidatejet)  < 0.8
+        # _nearMu = jets.delta_r(ak.firsts(events.Muon))  < 0.3
+        # selection.add('ak4btagOld', ak.sum(_bjets & ~_nearAK8 & ~_nearMu, axis=1) >= 1)
         _nearAK8 = jets.delta_r(candidatejet)  < 0.8
-        _nearMu = jets.delta_r(ak.firsts(events.Muon))  < 0.3
+        _nearMu = jets.delta_r(leadingmuon)  < 0.3
         selection.add('ak4btagOld', ak.sum(_bjets & ~_nearAK8 & ~_nearMu, axis=1) >= 1)
+
+        # _nearAK8 = jets.delta_r(candidatejet)  < 0.8
+        # _nearMu = jets.delta_r(candidatejet.nearest(events.Muon[goodmuon], axis=None))  < 0.3
+        # selection.add('ak4btagNew', ak.sum(_bjets & ~_nearAK8 & ~_nearMu, axis=1) >= 1)
+
         # probe side
         selection.add('minWjetpteta', (candidatejet.pt >= 200) & (abs(candidatejet.eta) < 2.4))
-        selection.add('noNearMuon', candidatejet.delta_r(candidatejet.nearest(events.Muon[goodmuon], axis=None)) > 1.0)
+        # selection.add('noNearMuon', candidatejet.delta_r(candidatejet.nearest(events.Muon[goodmuon], axis=None)) > 1.0)
+        selection.add('noNearMuon', candidatejet.delta_r(leadingmuon) > 1.0)
         #####
 
         if isRealData :
             genflavor = ak.zeros_like(candidatejet.pt)
         else:
+            if 'HToCC' in dataset or 'HToBB' in dataset:
+                if self._ewkHcorr:
+                    add_HiggsEW_kFactors(weights, events.GenPart, dataset)
+
             weights.add('genweight', events.genWeight)
             if "PSWeight" in events.fields:
                 add_ps_weight(weights, events.PSWeight)
@@ -555,6 +624,7 @@ class HbbProcessor(processor.ProcessorABC):
             else:
                 add_scalevar_7pt(weights,[])
                 add_scalevar_3pt(weights,[])
+
             add_pileup_weight(weights, events.Pileup.nPU, self._year, dataset)
             bosons = getBosons(events.GenPart)
             matchedBoson = candidatejet.nearest(bosons, axis=None, threshold=0.8)
@@ -575,7 +645,7 @@ class HbbProcessor(processor.ProcessorABC):
                 weights.add('minlo_rew', powheg_to_nnlops(ak.to_numpy(genBosonPt)))
 
             if self._newTrigger:
-                add_jetTriggerSF(weights, ak.firsts(fatjets), self._year, selection)
+                add_jetTriggerSF(weights, ak.firsts(fatjets), self._year if not self._skipRunB else f'{self._year}CDEF', selection)
             else:
                 add_jetTriggerWeight(weights, candidatejet.msdcorr, candidatejet.pt, self._year)
 
@@ -590,13 +660,14 @@ class HbbProcessor(processor.ProcessorABC):
         msd_matched = candidatejet.msdcorr * self._msdSF[self._year] * (genflavor > 0) + candidatejet.msdcorr * (genflavor == 0)
 
         regions = {
-            'signal': ['noleptons', 'minjetkin', 'met', 'jetid', 'antiak4btagMediumOppHem', 'n2ddt', 'trigger', 'lumimask', 'metfilter'],
+            'signal': ['noleptons', 'minjetkin', 'met', 'metfilter', 'jetid', 'antiak4btagMediumOppHem', 'n2ddt', 'trigger', 'lumimask'],
             'signal_noddt': ['noleptons', 'minjetkin', 'met', 'jetid', 'antiak4btagMediumOppHem', 'trigger', 'lumimask', 'metfilter'],
-            'muoncontrol': ['minjetkinmu', 'jetid', 'n2ddt', 'ak4btagMedium08', 'onemuon', 'muonkin', 'muonDphiAK8', 'muontrigger', 'lumimask', 'metfilter'],
-            'muoncontrol_noddt': ['minjetkinmu', 'jetid', 'ak4btagMedium08', 'onemuon', 'muonkin', 'muonDphiAK8', 'muontrigger', 'lumimask', 'metfilter'],
-            'wtag': ['tightMuon', 'onemuon', 'noNearMuon', 'ak4btagNearMu', 'met40p', 'ak4btagMediumOppHem',
-                     'minWjetpteta', 'ptrecoW', 'muontrigger', 'lumimask', 'metfilter'],
-            'wtag2': ['tightMuon', 'onemuon', 'met40p', 'ptrecoW200' , 'ak4btagOld', 'muontrigger', 'lumimask', 'metfilter'],
+            # 'muoncontrol': ['minjetkinmu', 'jetid', 'n2ddt', 'ak4btagMedium08', 'onemuon', 'muonkin', 'muonDphiAK8', 'muontrigger', 'lumimask', 'metfilter'],
+            'muoncontrol': ['onemuon', 'muonkin', 'muonDphiAK8', 'metfilter', 'minjetkinmu', 'jetid', 'ak4btagMedium08', 'n2ddt', 'muontrigger', 'lumimask'],
+            'muoncontrol_noddt': ['onemuon', 'muonkin', 'muonDphiAK8', 'jetid', 'metfilter', 'minjetkinmu', 'jetid', 'ak4btagMedium08', 'muontrigger', 'lumimask'],
+            'wtag': ['onemuon', 'tightMuon', 'minjetkinw', 'jetid', 'met40p', 'metfilter', 'ptrecoW200', 'ak4btagOld', 'muontrigger', 'lumimask'],
+            'wtag0': ['onemuon', 'tightMuon', 'met40p', 'metfilter', 'ptrecoW200', 'ak4btagOld', 'muontrigger', 'lumimask'],
+            'wtag2': ['onemuon', 'tightMuon', 'minjetkinw', 'jetid', 'ak4btagMediumOppHem', 'met40p', 'metfilter', 'ptrecoW200', 'ak4btagOld', 'muontrigger', 'lumimask'],
             'noselection': [],
         }
 
@@ -648,6 +719,16 @@ class HbbProcessor(processor.ProcessorABC):
                                               weight=weights.weight()[cut],
                                               pt=normalize(candidatejet.pt, cut))
 
+                    if 'ddcpass' in allcuts and isRealData and region == 'signal':
+                        if 'event' not in events.fields:
+                            continue
+                        _cut = selection.all(*allcuts, '_strict_mass', '_high_score')
+                        output['to_check']['mass'] += processor.column_accumulator(normalize(msd_matched, _cut))
+                        output['to_check']['fname'] += processor.column_accumulator(np.array([events.metadata['filename']]*len(normalize(msd_matched, _cut))))
+                        output['to_check']['event'] += processor.column_accumulator(normalize(events.event, _cut))
+                        output['to_check']['luminosityBlock'] += processor.column_accumulator(normalize(events.luminosityBlock, _cut))
+                        output['to_check']['run'] += processor.column_accumulator(normalize(events.run, _cut))
+
 
         if shift_name is None:
             systematics = [None] + list(weights.variations)
@@ -669,6 +750,7 @@ class HbbProcessor(processor.ProcessorABC):
             output['templates'].fill(
                 region=region,
                 systematic=sname,
+                runid=runmap(events.run)[cut],
                 genflavor=normalize(genflavor, cut),
                 pt=normalize(candidatejet.pt, cut),
                 msd=normalize(msd_matched, cut),
@@ -677,18 +759,30 @@ class HbbProcessor(processor.ProcessorABC):
                 ddcvb=normalize(cvb, cut),
                 weight=weight,
             )
-            if region in ['wtag', 'wtag2', 'noselection']:# and sname in ['nominal', 'pileup_weightDown', 'pileup_weightUp', 'jet_triggerDown', 'jet_triggerUp']:
+            if region in ['wtag', 'wtag0', 'wtag2', 'wtag3', 'wtag4', 'wtag5', 'wtag6', 'wtag7', 'noselection']:# and sname in ['nominal', 'pileup_weightDown', 'pileup_weightUp', 'jet_triggerDown', 'jet_triggerUp']:
                 output['wtag'].fill(
                     region=region,
                     systematic=sname,
                     genflavor=normalize(genflavor, cut),
-                    # pt=normalize(candidatejet.pt, cut),
+                    pt=normalize(candidatejet.pt, cut),
                     msd=normalize(msd_matched, cut),
                     n2ddt=normalize(candidatejet.n2ddt, cut),
                     ddc=normalize(cvl, cut),
                     ddcvb=normalize(cvb, cut),
                     weight=weight,
                 )
+            # if region in ['signal', 'noselection']:
+            #     output['etaphi'].fill(
+            #         region=region,
+            #         systematic=sname,
+            #         runid=runmap(events.run)[cut],
+            #         genflavor=normalize(genflavor, cut),
+            #         pt=normalize(candidatejet.pt, cut),
+            #         eta=normalize(candidatejet.eta, cut),
+            #         phi=normalize(candidatejet.phi, cut),
+            #         ddc=normalize(cvl, cut),
+            #         ddcvb=normalize(cvb, cut),
+            #     ),
             if not isRealData:
                 if wmod is not None:
                     _custom_weight = events.genWeight[cut] * wmod[cut]
@@ -715,12 +809,14 @@ class HbbProcessor(processor.ProcessorABC):
                     genflavor=normalize(genflavor, cut),
                     ddc=normalize(cvl, cut),
                     ddcvb=normalize(cvb, cut),
+                    msd=normalize(msd_matched, cut),
                     weight=weight,
                 )
                 output['signal_optb'].fill(
                     region=region,
                     genflavor=normalize(genflavor, cut),
                     ddb=normalize(bvl, cut),
+                    msd=normalize(msd_matched, cut),
                     weight=weight,
                 )
 

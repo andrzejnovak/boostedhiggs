@@ -29,3 +29,18 @@ def pass_json_array(runs, luminosityBlocks, lumi_mask):
     for run, block in zip(runs, luminosityBlocks):
         out.append(pass_json(run, block, lumi_mask))
     return np.array(out)
+
+@np.vectorize
+def runmap(runid):
+    if 297020 < runid < 299329:
+        return "B"
+    elif 299337 < runid < 302029:
+        return "C"
+    elif 302030 < runid < 303434:
+        return "D"
+    elif 303435 < runid < 304826:
+        return "E"
+    elif 304911 < runid < 306462:
+        return "F"
+    else:
+        return "0"
