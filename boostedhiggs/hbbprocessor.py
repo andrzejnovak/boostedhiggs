@@ -234,6 +234,7 @@ class HbbProcessor(processor.ProcessorABC):
             'sumw': 0.,
             'to_check': {
                 "mass" : processor.column_accumulator(np.array([])),
+                "njet" : processor.column_accumulator(np.array([])),
                 "fname" : processor.column_accumulator(np.array([])),
                 "run" : processor.column_accumulator(np.array([])),
                 "luminosityBlock" : processor.column_accumulator(np.array([])),
@@ -723,7 +724,10 @@ class HbbProcessor(processor.ProcessorABC):
                         if 'event' not in events.fields:
                             continue
                         _cut = selection.all(*allcuts, '_strict_mass', '_high_score')
+                        # _cut = selection.all('_strict_mass'')
                         output['to_check']['mass'] += processor.column_accumulator(normalize(msd_matched, _cut))
+                        nfatjet = ak.sum(((fatjets.pt > 200) & (abs(fatjets.eta) < 2.5) & fatjets.isTight), axis=1)
+                        output['to_check']['njet'] += processor.column_accumulator(normalize(nfatjet, _cut))
                         output['to_check']['fname'] += processor.column_accumulator(np.array([events.metadata['filename']]*len(normalize(msd_matched, _cut))))
                         output['to_check']['event'] += processor.column_accumulator(normalize(events.event, _cut))
                         output['to_check']['luminosityBlock'] += processor.column_accumulator(normalize(events.luminosityBlock, _cut))
