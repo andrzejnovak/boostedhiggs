@@ -54,7 +54,7 @@ class HbbProcessor(processor.ProcessorABC):
     def __init__(self, year='2017', systematics=True, jet_arbitration='pt', tagger='v2',
                  nnlops_rew=False, skipJER=False, tightMatch=False, newTrigger=False, looseTau=False,
                  newVjetsKfactor=False, ak4tagger='deepcsv', skipRunB=False, finebins=False,
-                 ewkHcorr=False,
+                 ewkHcorr=False, evtVizInfo=False,
                  ):
         self._year = year
         self._tagger  = tagger
@@ -70,6 +70,7 @@ class HbbProcessor(processor.ProcessorABC):
         self._ak4tagger = ak4tagger
         self._skipRunB = skipRunB
         self._finebins = finebins
+        self._evtVizInfo = evtVizInfo
 
         if self._ak4tagger == 'deepcsv':
             self._ak4tagBranch = 'btagDeepB'
@@ -720,7 +721,7 @@ class HbbProcessor(processor.ProcessorABC):
                                               weight=weights.weight()[cut],
                                               pt=normalize(candidatejet.pt, cut))
 
-                    if 'ddcpass' in allcuts and isRealData and region == 'signal':
+                    if self._evtVizInfo and 'ddcpass' in allcuts and isRealData and region == 'signal':
                         if 'event' not in events.fields:
                             continue
                         _cut = selection.all(*allcuts, '_strict_mass', '_high_score')
